@@ -1,0 +1,1700 @@
+/* 
+ * INL-05 Main 
+ * Author : DIGNSYS Inc.
+ */
+
+#include <Arduino.h>
+#include <SC16IS752Serial.h>
+#include <SoftWire.h>
+#include <Wire.h>
+#include <SPI.h>
+#include <Ethernet_Generic.h>
+#include <EEPROM.h>
+
+#define VERSION_INL05_FW  "20240130"
+
+#define PIN_LED_STATUS      20
+#define PIN_W5500_RST       40
+#define PIN_ETH_CS          39
+#define PIN_ETH_INT         38
+#define PIN_ETH_MISO        37
+#define PIN_ETH_SCLK        36
+#define PIN_ETH_MOSI        35
+#define PIN_I2C1_SDA        15
+#define PIN_I2C1_SCL        16
+#define PIN_I2C2_SDA        42
+#define PIN_I2C2_SCL        41
+#define PIN_RS232_RX        18
+#define PIN_RS232_TX        17
+#define PIN_RS485_RX        48
+#define PIN_RS485_TX        47
+#define PIN_BOOT            0
+#define PIN_SW_I2C_SDA      6
+#define PIN_SW_I2C_SCL      5
+#define PIN_SC16IS752_RST   7
+#define PIN_RELAY_OUT1      21
+#define PIN_RELAY_OUT2      45
+#define PIN_MAX485_DE       46
+// Not using TX inverting transistor
+#define MAX485_DIR_SEND     HIGH
+#define MAX485_DIR_RECEIVE  LOW
+
+// Soft I2C
+// 0x38 + A2,A1,A0
+#define I2C_ADDR_PCF_OUT    0x39  //0x21  // 39
+#define I2C_ADDR_PCF_SW     0x3b  //0x38  //0x23  // 3b
+// 0x20 + A2,A1,A0
+#define I2C_ADDR_MCP_IN     0x22
+#define I2C_ADDR_RTC        0x68
+
+uint8_t sw_tx_buf[16];
+uint8_t sw_rx_buf[16];
+uint8_t str_cur_date[9] = {0,};
+uint8_t str_cur_time[9] = {0,};
+
+//#define PCF_HW_I2C_TEST
+
+#ifdef PCF_HW_I2C_TEST
+SoftWire sw(9, 10);
+#else
+SoftWire sw(PIN_SW_I2C_SDA, PIN_SW_I2C_SCL);
+#endif
+
+//#define USING_SW_I2C_TO_DUART
+
+#ifdef USING_SW_I2C_TO_DUART
+uint8_t sw_duart_tx_buf[16];
+uint8_t sw_duart_rx_buf[16];
+SoftWire sw_duart(PIN_I2C1_SDA, PIN_I2C1_SCL);
+#endif
+
+void printTwoDigit(int n);
+void readTime(void);
+
+SC16IS752Serial serial0 = SC16IS752Serial(0, SC16IS752_SADDR1);
+SC16IS752Serial serial1 = SC16IS752Serial(1, SC16IS752_SADDR1);
+
+int i2c_read(uint8_t addr, uint8_t reg, uint8_t* pdata, uint8_t dlen);
+int i2c_read_wo(uint8_t addr, uint8_t reg, uint8_t* pdata, uint8_t dlen);
+int i2c_write(uint8_t addr, uint8_t reg, uint8_t* pdata, uint8_t dlen);
+int i2c_read_sw(uint8_t addr, uint8_t reg, uint8_t* pdata, uint8_t dlen);
+int i2c_write_sw(uint8_t addr, uint8_t reg, uint8_t* pdata, uint8_t dlen);
+#ifdef USING_SW_I2C_TO_DUART
+int i2c_read_sw_duart(uint8_t addr, uint8_t reg, uint8_t* pdata, uint8_t dlen);
+int i2c_write_sw_duart(uint8_t addr, uint8_t reg, uint8_t* pdata, uint8_t dlen);
+#endif
+
+void gpio_exp8_conf(void);
+void gpio_exp8_read(uint8_t addr, uint8_t* pdata);
+void gpio_exp8_read_m(uint8_t addr, uint8_t* pdata);
+void gpio_exp8_write(uint8_t addr, uint8_t data);
+void gpio_exp_conf(void);
+void gpio_exp_read(uint16_t* pdata);
+void gpio_exp_write(uint16_t data);
+
+#define RELAY_ON    1
+#define RELAY_OFF   0
+void relay_on_off(uint8_t pnum, uint8_t value);
+
+void write_duart_reg(uint8_t address, uint8_t channel, uint8_t reg, uint8_t value);
+uint8_t read_duart_reg(uint8_t address, uint8_t channel, uint8_t reg);
+
+uint8_t nc_mac[] = {
+  0x00, 0x08, 0xDC, 0x00, 0x00, 0x00
+};
+IPAddress nc_ip(192, 168, 1, 35);
+IPAddress nc_dns(192, 168, 1, 1);
+IPAddress nc_gateway(192, 168, 1, 1);
+IPAddress nc_subnet(255, 255, 255, 0);
+
+SPIClass* hspi;
+DhcpClass* dhcp = new DhcpClass();
+
+#define EEPROM_SIZE 512
+
+void sub_test_a(void);    // LED Test
+void sub_test_b(void);    // Button Test
+void sub_test_c(void);    // MCP23017 Test
+void sub_test_l(void);    // RTC Test
+void sub_test_m(void);    // IO Expander
+void sub_test_n(void);    // W5500 Network Function Test
+void sub_test_o(void);    // UART TX Function Test
+void sub_test_p(void);    // UART RX Function Test
+void sub_test_q(void);    // UART TX/RX Function Test
+void sub_test_r(void);    // EEPROM Test
+
+void setup() {
+
+  Serial.begin(115200);
+  Serial1.begin(115200, SERIAL_8N1, PIN_RS232_RX, PIN_RS232_TX);  // RS232
+  //Serial2.begin(19200, SERIAL_8N1, PIN_RS485_RX, PIN_RS485_TX);  // RS485, RS232 TTL
+  Serial2.begin(9600, SERIAL_8N1, PIN_RS485_RX, PIN_RS485_TX);  // RS485, RS232 TTL
+  pinMode(PIN_MAX485_DE, OUTPUT);
+  digitalWrite(PIN_MAX485_DE, MAX485_DIR_SEND);
+
+  pinMode(PIN_LED_STATUS, OUTPUT);
+
+  pinMode(PIN_W5500_RST, OUTPUT);
+  digitalWrite(PIN_W5500_RST, LOW);
+  delay(100);
+  digitalWrite(PIN_W5500_RST, HIGH);
+  delay(100);
+
+  // Reset SC16IS752
+  pinMode(PIN_SC16IS752_RST, OUTPUT);
+  digitalWrite(PIN_SC16IS752_RST, LOW);
+  delay(100);
+  digitalWrite(PIN_SC16IS752_RST, HIGH);
+  delay(100);
+
+  // Relay
+  pinMode(PIN_RELAY_OUT1, OUTPUT);
+  pinMode(PIN_RELAY_OUT2, OUTPUT);
+
+  // SW I2C Initialization
+  sw.setTxBuffer(sw_tx_buf, sizeof(sw_tx_buf));
+  sw.setRxBuffer(sw_rx_buf, sizeof(sw_rx_buf));
+  sw.setDelay_us(5);
+  sw.setTimeout(1000);
+  sw.begin();
+
+  // GPIO Expander
+  gpio_exp8_conf();
+
+  hspi = new SPIClass(HSPI);
+  hspi->begin(PIN_ETH_SCLK, PIN_ETH_MISO, PIN_ETH_MOSI, PIN_ETH_CS);
+
+#ifdef PCF_HW_I2C_TEST
+  Wire.begin(PIN_SW_I2C_SDA, PIN_SW_I2C_SCL, 400000);
+#else
+  //Wire.begin(PIN_I2C1_SDA, PIN_I2C1_SCL, 400000);
+  Wire.begin(PIN_I2C1_SDA, PIN_I2C1_SCL);
+  //Wire.setClock(50000);
+  Wire.setClock(400000);
+  //Wire.begin(PIN_I2C2_SDA, PIN_I2C2_SCL);
+  Serial.printf("I2C Clock: %0d\r\n", Wire.getClock());  // Default 100k
+#endif
+  //Wire1.begin(PIN_I2C2_SDA, PIN_I2C2_SCL, 400000);
+
+#ifdef USING_SW_I2C_TO_DUART
+  sw_duart.setTxBuffer(sw_duart_tx_buf, sizeof(sw_duart_tx_buf));
+  sw_duart.setRxBuffer(sw_duart_rx_buf, sizeof(sw_duart_rx_buf));
+  sw_duart.setDelay_us(5);
+  sw_duart.setTimeout(1000);
+  sw_duart.begin();
+#endif
+
+  // SC16IS752 UART setup. (begin is excuted here instead of pzem creation)
+  serial0.begin(SC_REF_BAUDRATE);
+  serial1.begin(SC_REF_BAUDRATE);
+
+  // initialize EEPROM with predefined size
+  EEPROM.begin(EEPROM_SIZE);
+
+}
+
+void loop() {
+
+  Serial.println();
+  Serial.println("INL-05 testing.");
+  Serial.println("(C) 2023 Dignsys");
+  Serial.printf("VERSION: %s\r\n\r\n", VERSION_INL05_FW);
+
+  char c;
+  while(c != 'x') {
+    Serial.printf("Input Command: ");
+    while(1){
+      if(Serial.available()) {
+        c = Serial.read();
+        if(isalnum(c)){
+          break;
+        }
+      }
+      delay(100);
+    }
+    Serial.printf("%c", c);
+    Serial.println();
+
+    switch(c) {
+      case 'a': 
+        sub_test_a();
+        break;
+      case 'b': 
+        sub_test_b();
+        break;
+      case 'c':
+        sub_test_c();
+        break;
+      case 'l':
+        sub_test_l();
+        break;
+      case 'm':
+        sub_test_m();
+        break;
+      case 'n':
+        sub_test_n();
+        break;
+      case 'o':
+        sub_test_o();
+        break;
+      case 'p':
+        sub_test_p();
+        break;
+      case 'q':
+        sub_test_q();
+        break;
+      case 'r':
+        sub_test_r();
+        break;
+      default:
+        break;
+    }
+  }
+  Serial.println("loop exit!");
+
+}
+
+int i2c_read(uint8_t addr, uint8_t reg, uint8_t* pdata, uint8_t dlen){
+
+  int ret = 0;
+
+  Wire.beginTransmission(addr);
+  Wire.write(reg);
+  Wire.endTransmission();
+  
+  Wire.requestFrom(addr, (uint8_t)dlen);
+
+  if (Wire.available()) {
+    for(int i = 0; i < dlen; i++) {
+      pdata[i] = Wire.read();
+    }
+  }
+
+  return ret;
+}
+
+int i2c_read_wo(uint8_t addr, uint8_t reg, uint8_t* pdata, uint8_t dlen){
+
+  int ret = 0;
+
+  Wire.beginTransmission(addr);
+  Wire.write(reg);
+  Wire.endTransmission(false);
+  
+  Wire.requestFrom(addr, (size_t)dlen, (bool) false);
+
+  if (Wire.available()) {
+    for(int i = 0; i < dlen; i++) {
+      pdata[i] = Wire.read();
+    }
+  }
+
+  return ret;
+}
+
+int i2c_write(uint8_t addr, uint8_t reg, uint8_t* pdata, uint8_t dlen){
+
+  int ret = 0;
+
+  Wire.beginTransmission(addr);
+  Wire.write(reg);
+  for(int i = 0; i < dlen; i++) {
+    Wire.write(pdata[i]);
+  }
+  Wire.endTransmission();
+
+  return ret;
+}
+
+int i2c_read_sw(uint8_t addr, uint8_t reg, uint8_t* pdata, uint8_t dlen){
+
+  int ret = 0;
+
+  sw.beginTransmission(addr);
+  sw.write(reg);
+  sw.endTransmission();
+  
+  sw.requestFrom(addr, (uint8_t)dlen);
+
+  if (sw.available()) {
+    for(int i = 0; i < dlen; i++) {
+      pdata[i] = sw.read();
+    }
+  }
+
+  return ret;
+}
+
+int i2c_write_sw(uint8_t addr, uint8_t reg, uint8_t* pdata, uint8_t dlen){
+
+  int ret = 0;
+
+  sw.beginTransmission(addr);
+  sw.write(reg);
+  for(int i = 0; i < dlen; i++) {
+    sw.write(pdata[i]);
+  }
+  sw.endTransmission();
+
+  return ret;
+}
+#ifdef USING_SW_I2C_TO_DUART
+int i2c_read_sw_duart(uint8_t addr, uint8_t reg, uint8_t* pdata, uint8_t dlen){
+
+  int ret = 0;
+
+  sw_duart.beginTransmission(addr);
+  sw_duart.write(reg);
+  sw_duart.endTransmission();
+  
+  sw_duart.requestFrom(addr, (uint8_t)dlen);
+
+  if (sw_duart.available()) {
+    for(int i = 0; i < dlen; i++) {
+      pdata[i] = sw_duart.read();
+    }
+  }
+
+  return ret;
+}
+
+int i2c_write_sw_duart(uint8_t addr, uint8_t reg, uint8_t* pdata, uint8_t dlen){
+
+  int ret = 0;
+
+  sw_duart.beginTransmission(addr);
+  sw_duart.write(reg);
+  for(int i = 0; i < dlen; i++) {
+    sw_duart.write(pdata[i]);
+  }
+  sw_duart.endTransmission();
+
+  return ret;
+}
+#endif
+
+void gpio_exp8_conf(void){
+#ifndef PCF_HW_I2C_TEST
+  sw.beginTransmission(I2C_ADDR_PCF_SW);
+  sw.write(0x00);
+  sw.endTransmission();
+
+  sw.beginTransmission(I2C_ADDR_PCF_OUT);
+  sw.write(0x00);
+  sw.endTransmission();
+#else
+  Wire.beginTransmission(I2C_ADDR_PCF_SW);
+  Wire.write(0xff);
+  Wire.endTransmission();
+
+  Wire.beginTransmission(I2C_ADDR_PCF_OUT);
+  Wire.write(0x00);
+  Wire.endTransmission();
+#endif
+}
+
+void gpio_exp8_read(uint8_t addr, uint8_t* pdata){
+
+  uint8_t rdata[3] = {0,};
+  uint8_t cnt = 0;
+  uint8_t idx = 0;
+  uint8_t rslt = 0;
+#ifndef PCF_HW_I2C_TEST
+  sw.beginTransmission(addr);
+  sw.write(0xff);
+  sw.endTransmission();
+
+  rslt = sw.requestFrom(addr, (uint8_t)2);
+  Serial.printf("Request Result: Addr: 0x%02x, 0x%02x\r\n", addr, rslt);
+
+  while(1){
+    if (sw.available()) {
+      rdata[idx++] = sw.read();
+      Serial.printf("I2C read 0x%02x at cnt %d\r\n", rdata[cnt], cnt);
+      if(idx >= 2){
+        Serial.printf("rdata: 0x%02x, 0x%02x\r\n", rdata[0], rdata[1]);
+        break;
+      }
+    }
+    delay(1);
+    if(++cnt > 100){
+      Serial.println("SW I2C read time-out!");
+      Serial.printf("rdata: 0x%02x, 0x%02x\r\n", rdata[0], rdata[1]);
+      break;
+    }
+  }
+#else
+  Wire.begin();
+  rslt = Wire.requestFrom(addr, (uint8_t)1);
+  Serial.printf("Request Result: Addr: 0x%02x, 0x%02x\r\n", addr, rslt);
+
+  while(1){
+    if (Wire.available()) {
+      rdata[0] = Wire.read();
+      Serial.printf("I2C read at cnt %d\r\n", cnt);
+      break;
+    }
+    delay(1);
+    if(++cnt > 100){
+      Serial.println("HW I2C read time-out!");
+      rdata[0] = Wire.read();
+      break;
+    }
+  }
+#endif
+  *pdata = rdata[0];
+
+}
+
+void gpio_exp8_read_m(uint8_t addr, uint8_t* pdata){
+
+  uint8_t ack = 0;
+  uint8_t rdata[9] = {0,};
+
+  sw.sdaLow();
+  delayMicroseconds(50);
+  sw.sclLow();
+  delayMicroseconds(50);
+
+  sw.sdaLow();  // A6
+  delayMicroseconds(50);
+  sw.sclHigh();
+  delayMicroseconds(50);
+  sw.sclLow();
+  delayMicroseconds(50);
+
+  sw.sdaHigh();  // A5
+  delayMicroseconds(50);
+  sw.sclHigh();
+  delayMicroseconds(50);
+  sw.sclLow();
+  delayMicroseconds(50);
+
+  sw.sdaHigh();  // A4
+  delayMicroseconds(50);
+  sw.sclHigh();
+  delayMicroseconds(50);
+  sw.sclLow();
+  delayMicroseconds(50);
+
+  sw.sdaHigh();  // A3
+  delayMicroseconds(50);
+  sw.sclHigh();
+  delayMicroseconds(50);
+  sw.sclLow();
+  delayMicroseconds(50);
+
+  sw.sdaLow();  // A2
+  delayMicroseconds(50);
+  sw.sclHigh();
+  delayMicroseconds(50);
+  sw.sclLow();
+  delayMicroseconds(50);
+
+  sw.sdaHigh();  // A1
+  delayMicroseconds(50);
+  sw.sclHigh();
+  delayMicroseconds(50);
+  sw.sclLow();
+  delayMicroseconds(50);
+
+  sw.sdaHigh();  // A0
+  delayMicroseconds(50);
+  sw.sclHigh();
+  delayMicroseconds(50);
+  sw.sclLow();
+  delayMicroseconds(50);
+
+  sw.sdaHigh();  // RE
+  delayMicroseconds(50);
+  sw.sclHigh();
+  delayMicroseconds(50);
+  sw.sclLow();
+  delayMicroseconds(50);
+
+  sw.sclLow();
+  delayMicroseconds(50);
+  sw.sclHigh();
+  delayMicroseconds(50);
+  sw.sdaLow();
+  delayMicroseconds(50);
+  sw.sdaHigh();
+  delayMicroseconds(500);
+
+  ack = sw.readSda(&sw);
+
+  for(int i; i < 8; i++){
+    sw.sclLow();
+    delayMicroseconds(50);
+    sw.sclHigh();
+    delayMicroseconds(50);
+    rdata[i] = sw.readSda(&sw);
+  }
+
+  sw.sclLow();
+  delayMicroseconds(50);
+  sw.sclHigh();
+  delayMicroseconds(50);
+  
+  Serial.printf("EOT[%d]: SDA: %d, SCL: %d\r\n", ack, sw.readSda(&sw), sw.readScl(&sw));
+
+  Serial.printf("Data: %d, %d, %d, %d, %d, %d, %d, %d\r\n", 
+    rdata[0], rdata[1], rdata[2], rdata[3], rdata[4], rdata[5], rdata[6], rdata[7]);
+
+  *pdata = rdata[0];
+
+}
+
+void gpio_exp8_write(uint8_t addr, uint8_t data){
+#ifndef PCF_HW_I2C_TEST
+  sw.beginTransmission(addr);
+  sw.write(data);
+  sw.endTransmission();
+#else  
+  Wire.beginTransmission(addr);
+  Wire.write(data);
+  Wire.endTransmission();
+#endif
+}
+
+void gpio_exp_conf(void){
+
+  uint8_t data[3] = {0,};
+
+  data[0] = 0xff;
+  data[1] = 0xff;
+
+  // IN/OUT set
+  i2c_write_sw(I2C_ADDR_MCP_IN, 0x00, data, 2);
+
+}
+
+void gpio_exp_read(uint16_t* pdata){
+
+  uint8_t rdata[3] = {0,};
+
+  i2c_read_sw(I2C_ADDR_MCP_IN, 0x12, rdata, 2);
+
+  *pdata = rdata[1] * 0x100 + rdata[0];
+
+}
+
+void gpio_exp_write(uint16_t data){
+
+  uint8_t wdata[3] = {0,};
+
+  wdata[0] = (uint8_t) (data & 0x00ff);
+  wdata[1] = (uint8_t) ((data>>8) & 0x00ff);
+
+  i2c_write_sw(I2C_ADDR_MCP_IN, 0x14, wdata, 2);
+
+}
+
+void relay_on_off(uint8_t pnum, uint8_t value){
+
+  digitalWrite(pnum, value);
+
+}
+
+void write_duart_reg(uint8_t address, uint8_t channel, uint8_t reg, uint8_t value){
+
+  Wire.beginTransmission(address);
+  Wire.write((reg<<3)|(channel<<1));
+  Wire.write(value);
+  Wire.endTransmission();
+
+}
+
+uint8_t read_duart_reg(uint8_t address, uint8_t channel, uint8_t reg){
+
+  uint8_t rslt;
+  uint8_t rdata[3] = {0,};
+  uint8_t cnt = 0;
+
+  Wire.beginTransmission(address);
+  Wire.write((reg<<3)|(channel<<1));
+  Wire.endTransmission();
+
+  rslt = Wire.requestFrom(address, (uint8_t)1);
+  Serial.printf("Request Result: Addr: 0x%02x, 0x%02x\r\n", address, rslt);
+
+  while(1){
+    if (Wire.available()) {
+      rdata[0] = Wire.read();
+      Serial.printf("I2C read at cnt %d\r\n", cnt);
+      break;
+    }
+    delay(1);
+    if(++cnt > 100){
+      Serial.println("HW I2C read time-out!");
+      rdata[0] = Wire.read();
+      break;
+    }
+  }
+
+  return rdata[0];
+
+}
+
+// Print with leading zero, as expected for time
+void printTwoDigit(int n)
+{
+  if (n < 10) {
+    Serial.print('0');
+  }
+  Serial.print(n);
+}
+
+void readTime(void)
+{
+  // Ensure register address is valid
+  sw.beginTransmission(I2C_ADDR_RTC);
+  sw.write(uint8_t(0)); // Access the first register
+  sw.endTransmission();
+
+  uint8_t registers[7]; // There are 7 registers we need to read from to get the date and time.
+  int numBytes = sw.requestFrom(I2C_ADDR_RTC, (uint8_t)7);
+  for (int i = 0; i < numBytes; ++i) {
+    registers[i] = sw.read();
+  }
+  if (numBytes != 7) {
+    Serial.print("Read wrong number of bytes: ");
+    Serial.println((int)numBytes);
+    return;
+  }
+
+  int tenYear = (registers[6] & 0xf0) >> 4;
+  int unitYear = registers[6] & 0x0f;
+  int year = (10 * tenYear) + unitYear;
+
+  int tenMonth = (registers[5] & 0x10) >> 4;
+  int unitMonth = registers[5] & 0x0f;
+  int month = (10 * tenMonth) + unitMonth;
+
+  int tenDateOfMonth = (registers[4] & 0x30) >> 4;
+  int unitDateOfMonth = registers[4] & 0x0f;
+  int dateOfMonth = (10 * tenDateOfMonth) + unitDateOfMonth;
+
+  // Reading the hour is messy. See the datasheet for register details!
+  bool twelveHour = registers[2] & 0x40;
+  bool pm = false;
+  int unitHour;
+  int tenHour;
+  if (twelveHour) {
+    pm = registers[2] & 0x20;
+    tenHour = (registers[2] & 0x10) >> 4;
+  } else {
+    tenHour = (registers[2] & 0x30) >> 4;
+  }
+  unitHour = registers[2] & 0x0f;
+  int hour = (10 * tenHour) + unitHour;
+  if (twelveHour) {
+    // 12h clock? Convert to 24h.
+    hour += 12;
+  }
+
+  int tenMinute = (registers[1] & 0xf0) >> 4;
+  int unitMinute = registers[1] & 0x0f;
+  int minute = (10 * tenMinute) + unitMinute;
+
+  int tenSecond = (registers[0] & 0xf0) >> 4;
+  int unitSecond = registers[0] & 0x0f;
+  int second = (10 * tenSecond) + unitSecond;
+
+  // ISO8601 is the only sensible time format
+  Serial.print("Time: ");
+  Serial.print(year);
+  Serial.print('-');
+  printTwoDigit(month);
+  Serial.print('-');
+  printTwoDigit(dateOfMonth);
+  Serial.print('T');
+  printTwoDigit(hour);
+  Serial.print(':');
+  printTwoDigit(minute);
+  Serial.print(':');
+  printTwoDigit(second);
+  Serial.println();
+
+  sprintf((char*) str_cur_date, "%02d-%02d-%02d", year, month, dateOfMonth);
+  sprintf((char*) str_cur_time, "%02d:%02d:%02d", hour, minute, second);
+  Serial.printf("cur_date: %s\r\n", str_cur_date);
+  Serial.printf("cur_time: %s\r\n", str_cur_time);
+}
+
+void setRS485Dir(bool dir) {
+
+  if(dir == MAX485_DIR_SEND) {
+    digitalWrite(PIN_MAX485_DE, MAX485_DIR_SEND);
+  } else if(dir == MAX485_DIR_RECEIVE) {
+    digitalWrite(PIN_MAX485_DE, MAX485_DIR_RECEIVE);
+  } else {
+    Serial.println("Invalid set of MAX485");
+  }
+}
+
+void sub_test_a(void) {
+
+  Serial.println("Sub-test A - LED");
+
+  char c = 0;
+  uint8_t led_status = 0;
+
+  Serial.println("Press q to quit: ");
+
+  while(1) {
+    if(Serial.available()) {
+      c = Serial.read();
+      if(isalnum(c)) Serial.println(c);
+    }
+    if(c == 'q'){
+      Serial.println("Quit loop");
+      break;
+    }
+    if(led_status) {
+      led_status = 0;
+      Serial.println("LED Off");
+    } else {
+      led_status = 1;
+      Serial.println("LED On");
+    }
+    digitalWrite(PIN_LED_STATUS, led_status);
+    delay(1000);
+  }
+}
+
+void sub_test_b(void) {
+
+  Serial.println("Sub-test B - Button");
+
+  char c = 0;
+  uint8_t button_status = 0;
+
+  Serial.println("Press q to quit: ");
+
+  while(1) {
+    if(Serial.available()) {
+      c = Serial.read();
+      if(isalnum(c)) Serial.println(c);
+    }
+    if(c == 'q'){
+      Serial.println("Quit loop");
+      break;
+    }
+    button_status = digitalRead(PIN_BOOT);
+    Serial.printf("Button: %d\r\n", button_status);
+    delay(1000);
+  }
+}
+
+void sub_test_c(void) {
+
+  uint8_t data;
+  int numBytes;
+  char c;
+  Serial.println("Sub-test C - MCP23017");
+
+  Serial.print("Input Test Number: ");
+  while(1){
+    if(Serial.available()) {
+      c = Serial.read();
+      if(isalnum(c)) break;
+    }
+    delay(100);
+  }
+  Serial.println(c);
+
+  if(c == '0') {  // 
+    
+  } else {
+    Serial.println("Invalid Test Number");
+    return;
+  }
+}
+
+void sub_test_l(void) {
+
+  uint8_t data[8] = {0,};
+  int numBytes;
+  char c;
+  Serial.println("Sub-test L - RTC");
+
+  Serial.print("Input Test Number: ");
+  while(1){
+    if(Serial.available()) {
+      c = Serial.read();
+      if(isalnum(c)) break;
+    }
+    delay(100);
+  }
+  Serial.println(c);
+
+  if(c == '0') {  // Read RTC 8 Bytes
+    sw.beginTransmission(I2C_ADDR_RTC);
+    sw.write(uint8_t(0)); // Access the first register
+    sw.endTransmission();
+
+    numBytes = sw.requestFrom(I2C_ADDR_RTC, (uint8_t)8);
+    for (int i = 0; i < numBytes; ++i) {
+      data[i] = sw.read();
+      Serial.print("data["); Serial.print(i, DEC); Serial.print("]: "); Serial.println(data[i], HEX);
+    }
+    if (numBytes != 8) {
+      Serial.print("Read wrong number of bytes: ");
+      Serial.println((int)numBytes);
+      return;
+    }
+  } else if (c == '1') {  // Enable RTC Clock
+    sw.beginTransmission(I2C_ADDR_RTC);
+    sw.write(uint8_t(0));
+    sw.write(uint8_t(0));
+    sw.endTransmission();
+  } else if (c == '2') {  // Disable RTC Clock
+    sw.beginTransmission(I2C_ADDR_RTC);
+    sw.write(uint8_t(0));
+    sw.write(uint8_t(0x80));
+    sw.endTransmission();
+  } else if (c == '3') {  // Set RTC Time
+    data[0] = 0*0x10;   // 10 Seconds
+    data[0] += 0;       // Seconds
+
+    data[1] = 5*0x10;   // 10 Minutes
+    data[1] += 7;       // Minutes
+
+    //data[2] = 0x40;   // 12-Hour Mode
+    data[2] = 0x00;     // 24-Hour Mode
+
+    data[2] += 0*0x10;  // 10 Hours
+    data[2] += 9;       // Hours
+
+    data[3] = 2;        // Day (1~7), Monday first
+
+    data[4] = 3*0x10;   // 10 Date
+    data[4] += 0;       // Date
+
+    data[5] = 0*0x10;   // 10 Month
+    data[5] += 1;       // Month
+
+    data[6] = 2*0x10;   // 10 Year
+    data[6] += 4;       // Year
+    sw.beginTransmission(I2C_ADDR_RTC);
+    sw.write(uint8_t(0));
+    for (int i = 0; i < 8; ++i) {
+      sw.write(data[i]);
+    }
+    sw.endTransmission();
+  } else if (c == '4') {  // Read Time
+    readTime();
+  } else {
+    Serial.println("Invalid Test Number");
+    return;
+  }
+
+}
+
+void sub_test_m(void) {
+
+  uint16_t data;
+  uint8_t rdata[2];
+  uint8_t tdata;
+  uint8_t val[2];
+  int numBytes;
+  char c;
+  uint8_t reg;
+  Serial.println("Sub-test M - IO Expander");
+
+  Serial.print("Input Test Number: ");
+  while(1){
+    if(Serial.available()) {
+      c = Serial.read();
+      if(isalnum(c)) break;
+    }
+    delay(100);
+  }
+  Serial.println(c);
+
+  if(c == '0') {  // Read IO
+    //gpio_exp8_read(I2C_ADDR_PCF_SW, rdata);
+    //Serial.printf("pcf_data: 0x%02x\r\n", rdata[0]);
+
+    gpio_exp8_read_m(I2C_ADDR_PCF_SW, rdata);
+    Serial.printf("pcf_data_m: 0x%02x\r\n", rdata[0]);
+
+#if 0
+    for(int i=1; i<9; i++){
+      if(get_swtich_val(i) == SWITCH_ON){
+        Serial.print("Switch"); Serial.print(i); Serial.println(": ON");
+      } else {
+        Serial.print("Switch"); Serial.print(i); Serial.println(": OFF");
+      }
+    }
+#endif
+  } else if(c == '1') {
+    gpio_exp8_read(I2C_ADDR_PCF_SW, rdata);
+    Serial.printf("pcf_data: 0x%02x\r\n", rdata[0]);
+
+  } else if(c == '2') {
+    Serial.print("Input PCF OUT Data: ");
+    while(1){
+      if(Serial.available()) {
+        c = Serial.read();
+        if(isalnum(c)) break;
+      }
+      delay(100);
+    }
+    c = tolower(c);
+    if((c >= '0') && (c <= '9')) {
+      tdata = (c - '0')*0x10;
+    } else if ((c >= 'a') && (c <= 'f')) {
+      tdata = (c - 'a' + 0xa)*0x10;
+    } else {
+      Serial.println("Invalid input");
+      return;
+    }
+    Serial.print(c);
+  
+    while(1){
+      if(Serial.available()) {
+        c = Serial.read();
+        if(isalnum(c)) break;
+      }
+      delay(100);
+    }
+    c = tolower(c);
+    if((c >= '0') && (c <= '9')) {
+      tdata |= (c - '0');
+    } else if ((c >= 'a') && (c <= 'f')) {
+      tdata |= (c - 'a' + 0xa);
+    } else {
+      Serial.println("Invalid input");
+      return;
+    }
+    Serial.println(c);
+
+    gpio_exp8_write(I2C_ADDR_PCF_OUT, tdata);
+    Serial.printf("pcf_data_write: 0x%02x\r\n", tdata);
+
+    //gpio_exp8_read(I2C_ADDR_PCF_OUT, rdata);
+    //Serial.printf("pcf_data_read: 0x%02x\r\n", rdata[0]);
+
+  } else if(c == '3') {
+    gpio_exp_read(&data);
+    Serial.printf("mcp_data: 0x%04x\r\n", data);
+
+  } else if(c == '4') {  // Relay On/Off
+    Serial.print("Relay Number[1,2]: ");
+    while(1){
+      if(Serial.available()) {
+        c = Serial.read();
+        if(isalnum(c)) break;
+      }
+      delay(100);
+    }
+    if(c == '1'){
+      rdata[0] = PIN_RELAY_OUT1;
+    } else if(c == '2'){
+      rdata[0] = PIN_RELAY_OUT2;
+    } else {
+      Serial.println("Invalid Relay Number!");
+      return;
+    }
+    Serial.println(c);
+
+    Serial.print("Relay [1: ON, 0: OFF]: ");
+    while(1){
+      if(Serial.available()) {
+        c = Serial.read();
+        if(isalnum(c)) break;
+      }
+      delay(100);
+    }
+    if(c == '0'){
+      rdata[1] = RELAY_OFF;
+    } else if(c == '1'){
+      rdata[1] = RELAY_ON;
+    } else {
+      Serial.println("Invalid Relay Operation!");
+      return;
+    }
+    Serial.println(c);
+
+    relay_on_off(rdata[0], rdata[1]);
+
+#if 0
+    for(int i=1; i<5; i++){
+      led_pm(i, LED_OFF);
+    }
+
+    for(int i=1; i<5; i++){
+      led_pm(i, LED_ON);
+      delay(500);
+      led_pm(i, LED_OFF);
+      delay(500);
+    }
+
+    led_fail(LED_ON);
+    delay(500);
+    led_fail(LED_OFF);
+    delay(500);
+
+    led_tx(LED_ON);
+    delay(500);
+    led_tx(LED_OFF);
+    delay(500);
+
+    led_rx(LED_ON);
+    delay(500);
+    led_rx(LED_OFF);
+    delay(500);
+#endif
+  } else if(c == '5') {  // Data Read
+    Serial.print("Input Register Address: ");
+    while(1){
+      if(Serial.available()) {
+        c = Serial.read();
+        if(isalnum(c)) break;
+      }
+      delay(100);
+    }
+    c = tolower(c);
+    if((c >= '0') && (c <= '9')) {
+      reg = (c - '0')*0x10;
+    } else if ((c >= 'a') && (c <= 'f')) {
+      reg = (c - 'a' + 0xa)*0x10;
+    } else {
+      Serial.println("Invalid input");
+      return;
+    }
+    Serial.print(c);
+  
+    while(1){
+      if(Serial.available()) {
+        c = Serial.read();
+        if(isalnum(c)) break;
+      }
+      delay(100);
+    }
+    c = tolower(c);
+    if((c >= '0') && (c <= '9')) {
+      reg |= (c - '0');
+    } else if ((c >= 'a') && (c <= 'f')) {
+      reg |= (c - 'a' + 0xa);
+    } else {
+      Serial.println("Invalid input");
+      return;
+    }
+    Serial.println(c);
+
+    //i2c_read(SC16IS752_SADDR0, reg, rdata, 2);
+#ifdef USING_SW_I2C_TO_DUART
+    i2c_read_sw_duart(SC16IS752_SADDR0, 0x00, rdata, 1);
+#else
+    rdata[0] = read_duart_reg(SC16IS752_SADDR0, SC16IS752_CHANNEL_A, reg);
+#endif
+    Serial.print("data[0]: "); Serial.println(rdata[0], HEX);
+    //Serial.print("data[1]: "); Serial.println(rdata[1], HEX);
+
+  } else if(c == '6') {  // Data Write
+    Serial.print("Input Register Address: ");
+    while(1){
+      if(Serial.available()) {
+        c = Serial.read();
+        if(isalnum(c)) break;
+      }
+      delay(100);
+    }
+    c = tolower(c);
+    if((c >= '0') && (c <= '9')) {
+      reg = (c - '0')*0x10;
+    } else if ((c >= 'a') && (c <= 'f')) {
+      reg = (c - 'a' + 0xa)*0x10;
+    } else {
+      Serial.println("Invalid input");
+      return;
+    }
+    Serial.print(c);
+  
+    while(1){
+      if(Serial.available()) {
+        c = Serial.read();
+        if(isalnum(c)) break;
+      }
+      delay(100);
+    }
+    c = tolower(c);
+    if((c >= '0') && (c <= '9')) {
+      reg |= (c - '0');
+    } else if ((c >= 'a') && (c <= 'f')) {
+      reg |= (c - 'a' + 0xa);
+    } else {
+      Serial.println("Invalid input");
+      return;
+    }
+    Serial.println(c);
+
+    Serial.print("Input Value to write: ");
+    while(1){
+      if(Serial.available()) {
+        c = Serial.read();
+        if(isalnum(c)) break;
+      }
+      delay(100);
+    }
+    c = tolower(c);
+    if((c >= '0') && (c <= '9')) {
+      val[0] = (c - '0')*0x10;
+    } else if ((c >= 'a') && (c <= 'f')) {
+      val[0] = (c - 'a' + 0xa)*0x10;
+    } else {
+      Serial.println("Invalid input");
+      return;
+    }
+    Serial.print(c);
+  
+    while(1){
+      if(Serial.available()) {
+        c = Serial.read();
+        if(isalnum(c)) break;
+      }
+      delay(100);
+    }
+    c = tolower(c);
+    if((c >= '0') && (c <= '9')) {
+      val[0] |= (c - '0');
+    } else if ((c >= 'a') && (c <= 'f')) {
+      val[0] |= (c - 'a' + 0xa);
+    } else {
+      Serial.println("Invalid input");
+      return;
+    }
+    Serial.println(c);
+
+    Serial.print("Input High Byte Value to write: ");
+    while(1){
+      if(Serial.available()) {
+        c = Serial.read();
+        if(isalnum(c)) break;
+      }
+      delay(100);
+    }
+    c = tolower(c);
+    if((c >= '0') && (c <= '9')) {
+      val[1] = (c - '0')*0x10;
+    } else if ((c >= 'a') && (c <= 'f')) {
+      val[1] = (c - 'a' + 0xa)*0x10;
+    } else {
+      Serial.println("Invalid input");
+      return;
+    }
+    Serial.print(c);
+  
+    while(1){
+      if(Serial.available()) {
+        c = Serial.read();
+        break;
+      }
+      delay(100);
+    }
+    c = tolower(c);
+    if((c >= '0') && (c <= '9')) {
+      val[1] |= (c - '0');
+    } else if ((c >= 'a') && (c <= 'f')) {
+      val[1] |= (c - 'a' + 0xa);
+    } else {
+      Serial.println("Invalid input");
+      return;
+    }
+    Serial.println(c);
+
+    i2c_write(SC16IS752_SADDR0, reg, val, 2);
+
+  } else if(c == '7') {  // Dual Uart LED
+#if 0  
+    for(int i=2; i<6; i++){
+      dual_uart_led_set(i, LED_OFF);
+    }
+
+    for(int i=2; i<6; i++){
+      dual_uart_led_set(i, LED_ON);
+      delay(500);
+      dual_uart_led_set(i, LED_OFF);
+      delay(500);
+    }
+#endif
+  } else if(c == '8') {  // GPIO HIGH
+    //digitalWrite(PIN_GPIO, HIGH);
+  } else if(c == '9') {  // GPIO LOW
+    //digitalWrite(PIN_GPIO, LOW);
+  } else if(c == 'a') {  // PCM_Control HIGH
+    Serial.println("PCM Control to HIGH - AC Power-ON");
+    //digitalWrite(PIN_PCM_CONTROL, HIGH);
+  } else if(c == 'b') {  // PCM_Control LOW
+    Serial.println("PCM Control to LOW - AC Power-OFF");
+    //digitalWrite(PIN_PCM_CONTROL, LOW);
+  } else if(c == 'c') {
+    Serial.print("System will be restart in 10 seconds");
+    for(int i=0; i<10; i++){
+      Serial.print(".");
+      delay(1000);
+    }
+    Serial.println();
+    ESP.restart();
+  } else {
+    Serial.println("Invalid Test Number");
+    return;
+  }
+
+}
+
+void sub_test_n(void) {
+
+  uint8_t data;
+  int numBytes;
+  char c;
+  Serial.println("Sub-test N - W5500");
+
+  Serial.print("Input Test Number: ");
+  while(1){
+    if(Serial.available()) {
+      c = Serial.read();
+      if(isalnum(c)){
+        break;
+      }
+    }
+    delay(100);
+  }
+  Serial.println(c);
+
+  if(c == '0') {  // 
+    // W5500
+    pinMode(PIN_ETH_CS, OUTPUT);
+    pinMode(PIN_ETH_SCLK, OUTPUT);
+    pinMode(PIN_ETH_MISO, INPUT);
+    pinMode(PIN_ETH_MOSI, OUTPUT);
+    digitalWrite(PIN_ETH_CS, HIGH);
+    digitalWrite(PIN_ETH_SCLK, LOW);
+
+    Serial.print("pCUR_SPI->pinSS(): "); Serial.println(pCUR_SPI->pinSS(), DEC);
+
+    SPI.begin(PIN_ETH_SCLK, PIN_ETH_MISO, PIN_ETH_MOSI, PIN_ETH_CS);
+    pinMode(SPI.pinSS(), OUTPUT);
+
+    Ethernet.init(PIN_ETH_CS);
+
+    Serial.print("pCUR_SPI->pinSS(): "); Serial.println(pCUR_SPI->pinSS(), DEC);
+
+    Serial.print("w5500: "); Serial.println(w5500, DEC);
+    Serial.print("getChip(): "); Serial.println(Ethernet.getChip(), DEC);
+
+  } else if(c == '1') {  // 
+
+    pinMode(SS, OUTPUT);
+    pinMode(SCK, OUTPUT);
+    pinMode(MISO, INPUT);
+    pinMode(MOSI, OUTPUT);
+    digitalWrite(SS, HIGH);
+    digitalWrite(SCK, LOW);
+
+    SPI.begin(SCK, MISO, MOSI, SS);
+    //SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
+    SPI.beginTransaction(SPISettings(40000000, MSBFIRST, SPI_MODE0));  
+    //SPI.beginTransaction(SPISettings(80000000, MSBFIRST, SPI_MODE0));  
+    digitalWrite(SS, LOW);
+    for(int i=0; i < 20; i++) {
+      SPI.transfer(0x55);
+    }
+    digitalWrite(SS, HIGH);
+    SPI.endTransaction();
+
+  } else if(c == '2') {  // 
+
+    pinMode(SS, OUTPUT);
+    digitalWrite(SS, HIGH);
+
+    SPIClass* vspi = new SPIClass(HSPI);
+
+    vspi->begin(PIN_ETH_SCLK, PIN_ETH_MISO, PIN_ETH_MOSI, PIN_ETH_CS);
+    vspi->beginTransaction(SPISettings(40000000, MSBFIRST, SPI_MODE0));
+    digitalWrite(SS, LOW);
+    for(int i=0; i < 20; i++) {
+      vspi->transfer(0x55);
+    }
+    digitalWrite(SS, HIGH);
+    vspi->endTransaction();
+    delete vspi;
+
+  } else if(c == '3') {  // 
+    Ethernet.init(PIN_ETH_CS);
+    hspi->setFrequency(40000000);
+    pCUR_SPI = hspi;
+    Ethernet.begin(nc_mac, nc_ip, nc_dns, nc_gateway, nc_subnet);
+    hspi->setFrequency(40000000);
+    Ethernet._pinRST = PIN_W5500_RST;
+    Ethernet._pinCS = PIN_ETH_CS;
+    Ethernet.setHostname("INL_001");
+    Ethernet.setRetransmissionCount(3);
+    Ethernet.setRetransmissionTimeout(4000);
+
+    Serial.print("getChip(): "); Serial.println(Ethernet.getChip(), DEC);
+    Serial.print("localIP(): "); Serial.println(Ethernet.localIP());
+
+  } else if(c == '4') {
+    Serial.print("linkStatus: "); Serial.println(Ethernet.linkStatus(), DEC); //LINK_ON, LINK_OFF
+    Serial.print("PhyState: "); Serial.println(Ethernet.phyState(), HEX);
+    Serial.print("HardwareStatus: "); Serial.println(Ethernet.hardwareStatus());
+    Serial.print("speed: "); Serial.println(Ethernet.speed(), DEC);
+    Serial.print("duplex: "); Serial.println(Ethernet.duplex(), DEC);
+    Serial.print("localIP(): "); Serial.println(Ethernet.localIP());
+    Serial.print("dnsServerIP: "); Serial.println(Ethernet.dnsServerIP());
+    Serial.print("gatewayIP(): "); Serial.println(Ethernet.gatewayIP());
+    Serial.print("subnetMask(): "); Serial.println(Ethernet.subnetMask());
+    Serial.print("hostName(): "); Serial.println(Ethernet.hostName());
+    Serial.print("_pinRST: "); Serial.println(Ethernet._pinRST);
+    Serial.print("_pinCS: "); Serial.println(Ethernet._pinCS);
+    Serial.print("_maxSockNum: "); Serial.println(Ethernet._maxSockNum);
+
+  } else if(c == '5') {
+    unsigned int localPort = 1883;
+    char packetBuffer[255];
+    int packetSize;
+    int len;
+    
+    EthernetUDP Udp;
+    Udp.begin(localPort);
+
+    while(1) {
+      packetSize = Udp.parsePacket();
+
+      if (packetSize)
+      {
+        Serial.print(F("Received packet of size "));
+        Serial.println(packetSize);
+        Serial.print(F("From "));
+        IPAddress remoteIp = Udp.remoteIP();
+        Serial.print(remoteIp);
+        Serial.print(F(", port "));
+        Serial.println(Udp.remotePort());
+
+        // read the packet into packetBufffer
+        len = Udp.read(packetBuffer, 255);
+
+        if (len > 0)
+        {
+          packetBuffer[len] = 0;
+        }
+
+        Serial.println(F("Contents:"));
+        Serial.println(packetBuffer);
+      }
+
+      if(Serial.available()) {
+        c = Serial.read();
+        if(c == 'q') {
+          Serial.println("Exit Udp Receive");
+          break;
+        }
+      }
+      delay(100);
+    }
+  } else if(c == '6') {
+    unsigned int localPort = 8080;
+    unsigned int serverPort = 1883;
+    int ret;
+    size_t wsize;
+    //IPAddress server_ip(192, 168, 1, 149);
+    IPAddress server_ip(192, 168, 1, 187);
+    
+    EthernetUDP Udp;
+    Udp.begin(localPort);
+
+    ret = Udp.beginPacket(server_ip, serverPort);
+    Serial.print("Return of beginPacket: "); Serial.println(ret, DEC);
+    wsize = Udp.write("hello from esp");
+    Serial.print("Return of write: "); Serial.println(wsize);
+    ret = Udp.endPacket();
+    Serial.print("Return of endPacket: "); Serial.println(ret, DEC);
+
+  } else if(c == '7') {
+    dhcp->beginWithDHCP(nc_mac);
+    Serial.print("localIP(): "); Serial.println(dhcp->getLocalIp());
+    Ethernet.setLocalIP(dhcp->getLocalIp());
+  } else if(c == '8') {
+    Serial.print("DhcpServerIp(): "); Serial.println(dhcp->getDhcpServerIp());
+    Serial.print("localIP(): "); Serial.println(dhcp->getLocalIp());
+  } else {
+    Serial.println("Invalid Test Number");
+    return;
+  }
+
+}
+
+void sub_test_o(void) {
+
+  uint8_t uport = 1;
+  uint8_t dtype = 0;
+  char c;
+  uint8_t data = 0;
+  Serial.println("Sub-test O - UART TX");
+
+  Serial.print("Select Port (1:RS232, 2:RS485): ");
+  while(1){
+    if(Serial.available()) {
+      c = Serial.read();
+      if(isalnum(c)) break;
+    }
+    delay(100);
+  }
+  Serial.println(c);
+
+  if(c == '1') {
+    uport = 1;
+    Serial1.flush();
+  } else if(c == '2') {
+    uport = 2;
+    Serial2.flush();
+    setRS485Dir(MAX485_DIR_SEND);
+  } else {
+    Serial.println("Invalid port number");
+    return;
+  }
+
+  while(1) {
+    Serial.println("Input data: ");
+    while(1){
+      if(Serial.available()) {
+        c = Serial.read();
+        if(isalnum(c) || (c == '#')) break;
+      }
+      delay(100);
+    }
+    if(!isalnum(c)){
+      Serial.println("Quit data input");
+      break;
+    }
+    Serial.println(c);
+    
+    if(uport == 1) {
+      Serial1.write(c);
+    } else if(uport == 2) {
+      Serial2.write(c);
+    }
+
+  }
+
+}
+
+void sub_test_p(void) {
+
+  uint8_t uport = 1;
+  uint8_t dtype = 0;
+  char c;
+  uint8_t data[128] = {0,};
+  uint16_t length, rsize;
+  Serial.println("Sub-test P - UART RX");
+
+  Serial.print("Select Port (1:RS232, 2:RS485): ");
+  while(1){
+    if(Serial.available()) {
+      c = Serial.read();
+      if(isalnum(c)) break;
+    }
+    delay(100);
+  }
+  Serial.println(c);
+
+  if(c == '1') {
+    uport = 1;
+    Serial1.flush();
+  } else if(c == '2') {
+    uport = 2;
+    Serial2.flush();
+    setRS485Dir(MAX485_DIR_RECEIVE);
+  } else {
+    Serial.println("Invalid port number");
+    return;
+  }
+
+  Serial.println("Received Data: ");
+
+  while(1) {
+    if(uport == 1) {
+      length = Serial1.available();
+      if(length) {
+        if(length > 128) length = 128;
+      }
+      rsize = Serial1.read(data, length);
+      for(int i=0; i < (int) rsize; i++) {
+        Serial.println((char) data[i]);
+      }
+    } else if(uport == 2) {
+      length = Serial2.available();
+      if(length) {
+        if(length > 128) length = 128;
+      }
+      rsize = Serial2.read(data, length);
+      for(int i=0; i < (int) rsize; i++) {
+        Serial.println((char) data[i]);
+      }
+    }
+
+    if(Serial.available()) {
+      c = Serial.read();
+      if((c == 'q') || (c == '#')) {
+        Serial.println("Exit Data Receive");
+        break;
+      }
+    }
+    delay(100);
+  }
+
+}
+
+void sub_test_q(void) {
+
+  uint8_t uport = 1;
+  uint8_t d_in = 0;
+  char c;
+  uint8_t rdata[128] = {0,};
+  uint8_t wdata[128] = {0,};
+  uint16_t rlen, rsize;
+  Serial.println("Sub-test Q - UART TX/RX");
+
+  Serial.print("Select Port (1:RS232, 2:RS232 TTL, 3:RS232_A, 4:RS232_B): ");
+  while(1){
+    if(Serial.available()) {
+      c = Serial.read();
+      if(isalnum(c)) break;
+    }
+    delay(100);
+  }
+  Serial.println(c);
+
+  if(c == '1') {
+    uport = 1;
+    Serial1.flush();
+  } else if(c == '2') {
+    uport = 2;
+    Serial2.flush();
+    //setRS485Dir(MAX485_DIR_SEND);
+  } else if(c == '3') {
+    uport = 3;
+  } else if(c == '4') {
+    uport = 4;
+  } else {
+    Serial.println("Invalid port number");
+    return;
+  }
+
+  Serial.println("Input data: ");
+  while(1) {
+    if(Serial.available()) {
+      c = Serial.read();
+
+      if(c == '#'){
+        Serial.println("Quit data input");
+        break;
+      }
+      if(isalnum(c)) {
+        d_in = 1;
+        Serial.print("d_in: "); Serial.println(c);
+      }
+    }
+
+    if(uport == 1) {
+      rlen = Serial1.available();
+      if(rlen){
+        if(rlen > 128) rlen = 128;
+        rsize = Serial1.read(rdata, rlen);
+        for(int i=0; i < (int) rsize; i++) {
+          Serial.print("r_in["); Serial.print(i); Serial.print("]: "); Serial.println((char) rdata[i]);
+        }
+      } else if (d_in) {
+        Serial1.write(c);
+        d_in = 0;
+      }
+    } else if(uport == 2) {
+      rlen = Serial2.available();
+      if(rlen){
+        if(rlen > 128) rlen = 128;
+        rsize = Serial2.read(rdata, rlen);
+        for(int i=0; i < (int) rsize; i++) {
+          Serial.print("r_in["); Serial.print(i); Serial.print("]: "); Serial.println((char) rdata[i]);
+        }
+      } else if (d_in) {
+        Serial2.write(c);
+        d_in = 0;
+      }
+    } else if(uport == 3) {
+      if(rlen){
+        if(rlen > 128) rlen = 128;
+        memset(rdata, 0x00, sizeof(rdata));
+        rsize = serial0.readData(rdata, 1);
+        for(int i=0; i < (int) rsize; i++) {
+          Serial.print("r_in["); Serial.print(i); Serial.print("]: "); Serial.println((char) rdata[i]);
+        }
+        if(rsize){
+          rlen -= rsize;
+        }
+      } else if (d_in) {
+        memset(wdata, 0x00, sizeof(wdata));
+        wdata[0] = c;
+        serial0.writeData(wdata, 1);
+        d_in = 0;
+        rlen = 1;
+      }
+    } else if(uport == 4) {
+      if(rlen){
+        if(rlen > 128) rlen = 128;
+        memset(rdata, 0x00, sizeof(rdata));
+        rsize = serial1.readData(rdata, 1);
+        for(int i=0; i < (int) rsize; i++) {
+          Serial.print("r_in["); Serial.print(i); Serial.print("]: "); Serial.println((char) rdata[i]);
+        }
+        if(rsize){
+          rlen -= rsize;
+        }
+      } else if (d_in) {
+        memset(wdata, 0x00, sizeof(wdata));
+        wdata[0] = c;
+        serial1.writeData(wdata, 1);
+        d_in = 0;
+        rlen = 1;
+      }
+    }
+    delay(100);
+  }
+
+}
+
+void sub_test_r(void) {
+
+  uint8_t data;
+  char c;
+  Serial.println("Sub-test R - EEPROM");
+
+  Serial.print("Input Test Number: ");
+  while(1){
+    if(Serial.available()) {
+      c = Serial.read();
+      break;
+    }
+    delay(100);
+  }
+  Serial.println(c);
+
+  if(c == '0') {
+    for(int i=0; i<EEPROM_SIZE; i++){
+      Serial.printf("Data[%d]: %02x\r\n", i, EEPROM.read(i));
+    }
+  } else if(c == '1') {
+    for(int i=0; i<EEPROM_SIZE; i++){
+      data = (uint8_t) (i % 256);
+      EEPROM.write(i, data);
+    }
+    EEPROM.commit();
+  } else {
+    Serial.println("Invalid Test Number");
+    return;
+  }
+
+}
