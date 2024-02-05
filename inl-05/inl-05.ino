@@ -10,10 +10,13 @@
 #include <SPI.h>
 #include <Ethernet_Generic.h>
 #include <EEPROM.h>
+#include <USB.h>
+#include <USBHIDKeyboard.h>
+#include <EspUsbHost.h>
 
-#define VERSION_INL05_FW  "20240130"
+#define VERSION_INL05_FW  "20240205"
 
-#define PIN_LED_STATUS      20
+#define PIN_LED_STATUS      10  // 20
 #define PIN_W5500_RST       40
 #define PIN_ETH_CS          39
 #define PIN_ETH_INT         38
@@ -33,11 +36,16 @@
 #define PIN_SW_I2C_SCL      5
 #define PIN_SC16IS752_RST   7
 #define PIN_RELAY_OUT1      21
-#define PIN_RELAY_OUT2      45
-#define PIN_MAX485_DE       46
+#define PIN_RELAY_OUT2      14
+#define PIN_MAX485_DE       11  //46
+#define PIN_OTG_VBUS_EN     3
+#define PIN_USB_ID          12
+#define PIN_VBUS_DEC        13
 // Not using TX inverting transistor
 #define MAX485_DIR_SEND     HIGH
 #define MAX485_DIR_RECEIVE  LOW
+#define OTG_VBUS_ENABLE     LOW   // Active Low
+#define OTG_VBUS_DISABLE    HIGH
 
 // Soft I2C
 // 0x38 + A2,A1,A0
@@ -46,6 +54,12 @@
 // 0x20 + A2,A1,A0
 #define I2C_ADDR_MCP_IN     0x22
 #define I2C_ADDR_RTC        0x68
+
+#define I2C_ADDR_USB        0x3d
+#define USB_DET_REG_ID      0x01
+#define USB_DET_REG_CTRL    0x02
+#define USB_DET_REG_INT     0x03
+#define USB_DET_REG_STATUS  0x04
 
 uint8_t sw_tx_buf[16];
 uint8_t sw_rx_buf[16];
@@ -110,11 +124,40 @@ IPAddress nc_subnet(255, 255, 255, 0);
 SPIClass* hspi;
 DhcpClass* dhcp = new DhcpClass();
 
+USBHIDKeyboard Keyboard;
+
+class MyEspUsbHost : public EspUsbHost {
+  void onKeyboardKey(uint8_t ascii, uint8_t keycode, uint8_t modifier) {
+    if (' ' <= ascii && ascii <= '~') {
+      Serial.printf("%c", ascii);
+    } else if (ascii == '\r') {
+      Serial.println();
+    }
+  };
+};
+MyEspUsbHost usbHost;
+
 #define EEPROM_SIZE 512
+
+enum {
+  E_USB_MODE_READY,
+  E_USB_MODE_DEVICE,
+  E_USB_MODE_HOST,
+};
+
+enum {
+  E_USB_ROLE_DEVIVE,
+  E_USB_ROLE_HOST,
+  E_USB_ROLE_DRP,
+  E_USB_ROLE_DRP2,
+};
+
+int8_t gv_usb_mode = E_USB_MODE_READY;
+int8_t gv_usbh_init = 0;
 
 void sub_test_a(void);    // LED Test
 void sub_test_b(void);    // Button Test
-void sub_test_c(void);    // MCP23017 Test
+void sub_test_c(void);    // USB OTG Test
 void sub_test_l(void);    // RTC Test
 void sub_test_m(void);    // IO Expander
 void sub_test_n(void);    // W5500 Network Function Test
@@ -129,6 +172,12 @@ void setup() {
   Serial1.begin(115200, SERIAL_8N1, PIN_RS232_RX, PIN_RS232_TX);  // RS232
   //Serial2.begin(19200, SERIAL_8N1, PIN_RS485_RX, PIN_RS485_TX);  // RS485, RS232 TTL
   Serial2.begin(9600, SERIAL_8N1, PIN_RS485_RX, PIN_RS485_TX);  // RS485, RS232 TTL
+
+  pinMode(PIN_OTG_VBUS_EN, OUTPUT);
+  digitalWrite(PIN_OTG_VBUS_EN, OTG_VBUS_DISABLE);
+  pinMode(PIN_USB_ID, INPUT);
+  pinMode(PIN_VBUS_DEC, INPUT);
+
   pinMode(PIN_MAX485_DE, OUTPUT);
   digitalWrite(PIN_MAX485_DE, MAX485_DIR_SEND);
 
@@ -190,6 +239,14 @@ void setup() {
 
   // initialize EEPROM with predefined size
   EEPROM.begin(EEPROM_SIZE);
+
+  // USB Device 
+  //Keyboard.begin();
+  //USB.begin();
+
+  // USB Host
+  //usbHost.begin();
+  //usbHost.setHIDLocal(HID_LOCAL_US);
 
 }
 
@@ -789,10 +846,15 @@ void sub_test_b(void) {
 
 void sub_test_c(void) {
 
-  uint8_t data;
+  uint8_t data[5] = {0,};
   int numBytes;
-  char c;
-  Serial.println("Sub-test C - MCP23017");
+  char c, c_out;
+  uint8_t usb_id, usb_id_prev, usb_vbus_det;
+  uint8_t usb_pol, usb_port_status, usb_chg_current, usb_vbus;
+  uint8_t usb_host_prc = 0;
+  uint8_t usb_device_prc = 0;
+
+  Serial.println("Sub-test C - USB-OTG");
 
   Serial.print("Input Test Number: ");
   while(1){
@@ -805,7 +867,245 @@ void sub_test_c(void) {
   Serial.println(c);
 
   if(c == '0') {  // 
-    
+
+    i2c_read_sw(I2C_ADDR_USB, 0x01, data, 4);
+    Serial.printf("Device ID[0x%02x], Control[0x%02x], Interrupt[0x%02x], CC status[0x%02x]\r\n", 
+      data[0], data[1], data[2], data[3]);
+    Serial.printf("USB_ID[%d], VBUS_DET[%d]\r\n", digitalRead(PIN_USB_ID), digitalRead(PIN_VBUS_DEC));
+    Serial.println("* Control ===");
+    if((data[1]&0x06) == 0x00){
+      Serial.println("Port: Device(SNK)");
+    } else if((data[1]&0x06) == 0x02){
+      Serial.println("Port: Host(SRC)");
+    } else {
+      Serial.println("Port: Dual Role");
+    }
+    Serial.println("* Interrupt ===");
+    if((data[2]&0x02)){
+      Serial.println("Detach Event");
+    } else if((data[2]&0x01)){
+      Serial.println("Attach Event");
+    } else {
+      Serial.println("No Event");
+    }
+    Serial.println("* CC Status ===");
+    if((data[3]&0x80)){
+      Serial.println("VBUS detected");
+    } else {
+      Serial.println("VBUS not detected");
+    }
+    if((data[3]&0x60) == 0x20){
+      Serial.println("Charging current detection - Default current mode");
+    } else if((data[3]&0x60 == 0x40)){
+      Serial.println("Charging current detection - Medium current mode");
+    } else if((data[3]&0x60 == 0x60)){
+      Serial.println("Charging current detection - High current mode");
+    } else {
+      Serial.println("Charging current detection - Standby");
+    }
+    if((data[3]&0x1c) == 0x04){
+      Serial.println("Attached port status - Device");
+    } else if((data[3]&0x1c) == 0x08){
+      Serial.println("Attached port status - Host");
+    } else if((data[3]&0x1c) == 0x0c){
+      Serial.println("Attached port status - Audio Adapter Accessory");
+    } else if((data[3]&0x1c) == 0x10){
+      Serial.println("Attached port status - Debug Accessory");
+    } else if((data[3]&0x1c) == 0x14){
+      Serial.println("Attached port status - Device with Active Cable");
+    } else if((data[3]&0x1c) == 0x00){
+      Serial.println("Attached port status - Standby");
+    } else {
+      Serial.println("Attached port status - Unknown");
+    }
+    if((data[3]&0x03) == 0x00){
+      Serial.println("Plug polarity - Standby");
+    } else if((data[3]&0x03) == 0x01){
+      Serial.println("Plug polarity - CC1 makes connection");
+    } else if((data[3]&0x03) == 0x02){
+      Serial.println("Plug polarity - CC2 makes connection");
+    } else {
+      Serial.println("Plug polarity - Undetermined");
+    }
+
+  } else if(c == '1') {
+
+    Keyboard.begin();
+    USB.begin();
+
+  } else if(c == '2') {
+
+    while(1) {
+      Serial.println("Input data: ");
+      while(1){
+        if(Serial.available()) {
+          c = Serial.read();
+          if(isalnum(c) || (c == '#')) break;
+        }
+        delay(100);
+      }
+      if(!isalnum(c)){
+        Serial.println("Quit data input");
+        break;
+      }
+      Serial.println(c);
+      
+      c_out = c + 1;
+
+      Keyboard.write(c_out);
+    }
+  } else if(c == '3') {
+
+    // Device Mode
+    data[0] = E_USB_ROLE_DEVIVE << 1;  //0x00;
+    i2c_write_sw(I2C_ADDR_USB, USB_DET_REG_CTRL, data, 1);
+
+    digitalWrite(PIN_OTG_VBUS_EN, OTG_VBUS_DISABLE);
+    i2c_read_sw(I2C_ADDR_USB, USB_DET_REG_ID, data, 4);
+    Serial.printf("Status[%02x-%02x-%02x-%02x]: 0x%02x\r\n", data[0], data[1], data[2], data[3], data[3]);
+
+  } else if(c == '4') {
+
+    // Host Mode
+    data[0] = E_USB_ROLE_HOST << 1;  //0x02;
+    i2c_write_sw(I2C_ADDR_USB, USB_DET_REG_CTRL, data, 1);
+
+//    digitalWrite(PIN_OTG_VBUS_EN, OTG_VBUS_ENABLE);
+    digitalWrite(PIN_OTG_VBUS_EN, OTG_VBUS_DISABLE);
+    i2c_read_sw(I2C_ADDR_USB, USB_DET_REG_ID, data, 4);
+    Serial.printf("Status[%02x-%02x-%02x-%02x]: 0x%02x\r\n", data[0], data[1], data[2], data[3], data[3]);
+
+  } else if(c == '5') {
+
+    usbHost.begin();
+    usbHost.setHIDLocal(HID_LOCAL_US);
+
+  } else if(c == '6') {
+
+    usb_id_prev = 0xff;
+    Serial.printf("Is Ready: %d\r\n", usbHost.isReady);
+    while(1) {
+
+      if(Serial.available()) {
+        c = Serial.read();
+        if(c == '#'){
+          Serial.println("Quit USB-Host Task");
+          break;
+        }
+      }
+      usb_id = digitalRead(PIN_USB_ID);
+      if(usb_id != usb_id_prev){
+        if(!usb_id){
+          digitalWrite(PIN_OTG_VBUS_EN, OTG_VBUS_ENABLE);
+          Serial.println("VBUS applied");
+        } else {
+          digitalWrite(PIN_OTG_VBUS_EN, OTG_VBUS_DISABLE);
+          Serial.println("VBUS removed");
+        }
+        usb_id_prev = usb_id;
+      }
+
+      usbHost.task();
+    }
+  } else if(c == '7') {
+
+    // Dual Role (DRP)
+    data[0] = E_USB_ROLE_DRP << 1;
+    i2c_write_sw(I2C_ADDR_USB, USB_DET_REG_CTRL, data, 1);
+    while(1) {
+
+      if(Serial.available()) {
+        c = Serial.read();
+        if(c == '#'){
+          Serial.println("Quit CC-Status Check");
+          break;
+        }
+      }
+      
+      i2c_read_sw(I2C_ADDR_USB, USB_DET_REG_ID, data, 4);
+      usb_pol = data[3]&0x03;
+      usb_port_status = (data[3]>>2)&0x07;
+      usb_chg_current = (data[3]>>5)&0x03;
+      usb_vbus = (data[3]>>7)&0x01;
+      usb_id = digitalRead(PIN_USB_ID);
+      usb_vbus_det = digitalRead(PIN_VBUS_DEC);
+
+#if 1
+      if((!usb_host_prc) && (!usb_device_prc)) {
+        Serial.printf("Data: %02x-%02x-%02x-%02x, VBUS: 0x%02x, Current: 0x%02x, Port: 0x%02x, Pol: 0x%02x\r\n",
+          data[0], data[1], data[2], data[3], usb_vbus, usb_chg_current, usb_port_status, usb_pol);
+        Serial.printf("USB_ID: %d, VBUS_DET: %d\r\n", usb_id, usb_vbus_det);
+      }
+#endif
+
+      if(gv_usb_mode == E_USB_MODE_READY) {
+
+        if(usb_vbus_det) {
+          data[0] = E_USB_ROLE_DEVIVE << 1;
+          i2c_write_sw(I2C_ADDR_USB, USB_DET_REG_CTRL, data, 1);
+          gv_usb_mode = E_USB_MODE_DEVICE;
+          digitalWrite(PIN_OTG_VBUS_EN, OTG_VBUS_DISABLE);
+          Serial.println("--- Goto USB Device Mode ----------");
+          Serial.println("Input Keyboard Data :");
+          Keyboard.begin();
+          USB.begin();
+          usb_device_prc = 1;
+        } else if(!usb_id) {
+          data[0] = E_USB_ROLE_HOST << 1;
+          i2c_write_sw(I2C_ADDR_USB, USB_DET_REG_CTRL, data, 1);
+          gv_usb_mode = E_USB_MODE_HOST;
+          delay(500);
+          digitalWrite(PIN_OTG_VBUS_EN, OTG_VBUS_ENABLE);
+          delay(500);
+          Serial.println("--- Goto USB Host Mode ----------");
+          if(!gv_usbh_init) {
+            usbHost.begin();
+            usbHost.setHIDLocal(HID_LOCAL_US);
+            gv_usbh_init = 1;
+          }
+          usb_host_prc = 1;
+        }
+      } else if(gv_usb_mode == E_USB_MODE_DEVICE) {
+
+        if(!usb_vbus_det) {
+          data[0] = E_USB_ROLE_DRP << 1;
+          i2c_write_sw(I2C_ADDR_USB, USB_DET_REG_CTRL, data, 1);
+          gv_usb_mode = E_USB_MODE_READY;
+          digitalWrite(PIN_OTG_VBUS_EN, OTG_VBUS_DISABLE);
+          Serial.println();
+          Serial.println("--- Goto USB Ready ----------");
+          USB.~ESPUSB();
+          Keyboard.end();
+          usb_device_prc = 0;
+        } else {
+
+          if(Serial.available()) {
+            c = Serial.read();
+            if(isalnum(c)) {
+              c_out = c + 1;
+              Keyboard.write(c_out);
+              Serial.print(c);
+            }
+          }
+        }
+      } else if(gv_usb_mode == E_USB_MODE_HOST) {
+
+        if(usb_id) {
+          data[0] = E_USB_ROLE_DRP << 1;
+          i2c_write_sw(I2C_ADDR_USB, USB_DET_REG_CTRL, data, 1);
+          gv_usb_mode = E_USB_MODE_READY;
+          digitalWrite(PIN_OTG_VBUS_EN, OTG_VBUS_DISABLE);
+          Serial.println();
+          Serial.println("--- Goto USB Ready ----------");
+          usb_host_prc = 0;
+        } else {
+          usbHost.task();
+        }
+      }
+
+      if((!usb_host_prc) && (!usb_device_prc)) delay(1000);
+    }
+
   } else {
     Serial.println("Invalid Test Number");
     return;
