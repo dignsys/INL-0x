@@ -1,4 +1,4 @@
-# INL-01 (Arduino)
+# INL-0x Series (Arduino)
 
 ## Install Arduino IDE
 - Download Arduino IDE
