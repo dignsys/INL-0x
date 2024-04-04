@@ -13,8 +13,9 @@
 #include <USB.h>
 #include <USBHIDKeyboard.h>
 #include <EspUsbHost.h>
+#include <esp_log.h>
 
-#define VERSION_INL05_FW  "20240205"
+#define VERSION_INL05_FW  "20240404"
 
 #define PIN_LED_STATUS      10  // 20
 #define PIN_W5500_RST       40
@@ -248,6 +249,7 @@ void setup() {
   //usbHost.begin();
   //usbHost.setHIDLocal(HID_LOCAL_US);
 
+  //esp_log_level_set("EspUsbHost", ESP_LOG_VERBOSE);
 }
 
 void loop() {
@@ -1048,7 +1050,9 @@ void sub_test_c(void) {
           Serial.println("--- Goto USB Device Mode ----------");
           Serial.println("Input Keyboard Data :");
           Keyboard.begin();
+          //Serial.println("usb device stage 1");
           USB.begin();
+          //Serial.println("usb device stage 2");
           usb_device_prc = 1;
         } else if(!usb_id) {
           data[0] = E_USB_ROLE_HOST << 1;
@@ -1060,7 +1064,9 @@ void sub_test_c(void) {
           Serial.println("--- Goto USB Host Mode ----------");
           if(!gv_usbh_init) {
             usbHost.begin();
+            //Serial.println("host stage 1");
             usbHost.setHIDLocal(HID_LOCAL_US);
+            //Serial.println("host stage 2");
             gv_usbh_init = 1;
           }
           usb_host_prc = 1;
@@ -1099,7 +1105,9 @@ void sub_test_c(void) {
           Serial.println("--- Goto USB Ready ----------");
           usb_host_prc = 0;
         } else {
+          //Serial.println("host stage 3");
           usbHost.task();
+          //Serial.println("host stage 4");
         }
       }
 

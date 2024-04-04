@@ -29,6 +29,11 @@
 - User Arduino Library (.ZIP) 추가
 
   Arduino IDE : Sketch --> Include Library --> Add .ZIP Libraries...
+
+  Install이 필요한 (.ZIP) Library : SC16IS752Serial-pms-x.x.x.zip, EspUsbHost-inl-x.x.x.zip
+
+  [*] EspUsbHost는 Arduino IDE에서 설치하지 마시고, 반드시 ZIP Library를 설치하는 것이  필요함.
+
 ## Sample Source Code for Hardware Basic Operation
 - 실행 방법
 
