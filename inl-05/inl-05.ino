@@ -15,7 +15,7 @@
 #include <EspUsbHost.h>
 #include <esp_log.h>
 
-#define VERSION_INL05_FW  "20240404"
+#define VERSION_INL05_FW  "20240412"
 
 #define PIN_LED_STATUS      10  // 20
 #define PIN_W5500_RST       40
@@ -42,9 +42,19 @@
 #define PIN_OTG_VBUS_EN     3
 #define PIN_USB_ID          12
 #define PIN_VBUS_DEC        13
+#define PIN_ADC_IN0         1
+#define PIN_ADC_IN1         2
+#define PIN_ADC_IN3         4
+#define PIN_ADC_IN8         9
+#if 1
+// Using TX inverting transistor
+#define MAX485_DIR_SEND     LOW
+#define MAX485_DIR_RECEIVE  HIGH
+#else
 // Not using TX inverting transistor
 #define MAX485_DIR_SEND     HIGH
 #define MAX485_DIR_RECEIVE  LOW
+#endif
 #define OTG_VBUS_ENABLE     LOW   // Active Low
 #define OTG_VBUS_DISABLE    HIGH
 
@@ -171,8 +181,10 @@ void setup() {
 
   Serial.begin(115200);
   Serial1.begin(115200, SERIAL_8N1, PIN_RS232_RX, PIN_RS232_TX);  // RS232
+  //Serial2.begin(115200, SERIAL_8N1, PIN_RS485_RX, PIN_RS485_TX);  // RS485, RS232 TTL
+  Serial2.begin(57600, SERIAL_8N1, PIN_RS485_RX, PIN_RS485_TX);  // RS485, RS232 TTL
   //Serial2.begin(19200, SERIAL_8N1, PIN_RS485_RX, PIN_RS485_TX);  // RS485, RS232 TTL
-  Serial2.begin(9600, SERIAL_8N1, PIN_RS485_RX, PIN_RS485_TX);  // RS485, RS232 TTL
+  //Serial2.begin(9600, SERIAL_8N1, PIN_RS485_RX, PIN_RS485_TX);  // RS485, RS232 TTL
 
   pinMode(PIN_OTG_VBUS_EN, OUTPUT);
   digitalWrite(PIN_OTG_VBUS_EN, OTG_VBUS_DISABLE);
@@ -1529,10 +1541,44 @@ void sub_test_m(void) {
       delay(500);
     }
 #endif
-  } else if(c == '8') {  // GPIO HIGH
-    //digitalWrite(PIN_GPIO, HIGH);
-  } else if(c == '9') {  // GPIO LOW
-    //digitalWrite(PIN_GPIO, LOW);
+  } else if(c == '8') {  // ADC Input
+    uint16_t adc_in0, adc_in1, adc_in3, adc_in8;
+    int adc_mvolt0, adc_mvolt1, adc_mvolt3, adc_mvolt8;
+
+    analogReadResolution(12);
+
+    pinMode(PIN_ADC_IN0, ANALOG);
+    pinMode(PIN_ADC_IN1, ANALOG);
+    pinMode(PIN_ADC_IN3, ANALOG);
+    pinMode(PIN_ADC_IN8, ANALOG);
+
+    adc_in0 = analogRead(PIN_ADC_IN0);
+    adc_in1 = analogRead(PIN_ADC_IN1);
+    adc_in3 = analogRead(PIN_ADC_IN3);
+    adc_in8 = analogRead(PIN_ADC_IN8);
+
+    adc_mvolt0 = analogReadMilliVolts(PIN_ADC_IN0);
+    adc_mvolt1 = analogReadMilliVolts(PIN_ADC_IN1);
+    adc_mvolt3 = analogReadMilliVolts(PIN_ADC_IN3);
+    adc_mvolt8 = analogReadMilliVolts(PIN_ADC_IN8);
+
+    Serial.printf("ADC Input: %d, %d, %d, %d\r\n", adc_in0, adc_in1, adc_in3, adc_in8);
+    Serial.printf("ADC Input Voltage (mV): %d, %d, %d, %d\r\n", adc_mvolt0, adc_mvolt1, adc_mvolt3, adc_mvolt8);
+
+  } else if(c == '9') {  // GPIO Input
+    uint16_t gpio_in0, gpio_in1, gpio_in3, gpio_in8;
+
+    pinMode(PIN_ADC_IN0, INPUT);
+    pinMode(PIN_ADC_IN1, INPUT);
+    pinMode(PIN_ADC_IN3, INPUT);
+    pinMode(PIN_ADC_IN8, INPUT);
+
+    gpio_in0 = digitalRead(PIN_ADC_IN0);
+    gpio_in1 = digitalRead(PIN_ADC_IN1);
+    gpio_in3 = digitalRead(PIN_ADC_IN3);
+    gpio_in8 = digitalRead(PIN_ADC_IN8);
+
+    Serial.printf("GPIO Input: %d, %d, %d, %d\r\n", gpio_in0, gpio_in1, gpio_in3, gpio_in8);
   } else if(c == 'a') {  // PCM_Control HIGH
     Serial.println("PCM Control to HIGH - AC Power-ON");
     //digitalWrite(PIN_PCM_CONTROL, HIGH);
@@ -1639,7 +1685,7 @@ void sub_test_n(void) {
     hspi->setFrequency(40000000);
     Ethernet._pinRST = PIN_W5500_RST;
     Ethernet._pinCS = PIN_ETH_CS;
-    Ethernet.setHostname("INL_001");
+    Ethernet.setHostname("INL05_001");
     Ethernet.setRetransmissionCount(3);
     Ethernet.setRetransmissionTimeout(4000);
 
