@@ -1872,7 +1872,7 @@ void sub_test_n(void) {
 
       if(Serial.available()) {
         c = Serial.read();
-        if(c == 'q') {
+        if((c == 'q') || (c == '#')) {
           Serial.println("Exit Udp Receive");
           break;
         }
@@ -1904,6 +1904,93 @@ void sub_test_n(void) {
   } else if(c == '8') {
     Serial.print("DhcpServerIp(): "); Serial.println(dhcp->getDhcpServerIp());
     Serial.print("localIP(): "); Serial.println(dhcp->getLocalIp());
+  } else if(c == '9') {
+    unsigned int localPort = 8888;
+    //const char timeServer[] = "time.nist.gov";
+    const char timeServer[] = "time.windows.com";
+    const int NTP_PACKET_SIZE = 48;
+    byte packetBuffer[NTP_PACKET_SIZE];
+    int inPacketSize = 0;
+    int outPacketSize = 0;
+
+    EthernetUDP Udp;
+    Udp.begin(localPort);
+
+    while(1) {
+
+      // send NTP packet
+      memset(packetBuffer, 0, NTP_PACKET_SIZE);
+      packetBuffer[0] = 0b11100011;  // LI, Version, Mode
+      packetBuffer[1] = 0;  // Stratum, or type of clock
+      packetBuffer[2] = 6;  // Polling Interval
+      packetBuffer[3] = 0xEC;  // Peer Clock Precision
+      packetBuffer[12] = 49;
+      packetBuffer[13] = 0x4E;
+      packetBuffer[14] = 49;
+      packetBuffer[15] = 52;
+
+      Udp.beginPacket(timeServer, 123);
+      outPacketSize = Udp.write(packetBuffer, NTP_PACKET_SIZE);
+      Serial.printf("outPacketSize = %d\r\n", outPacketSize);
+      Udp.endPacket();
+
+      delay(1000);
+      inPacketSize = Udp.parsePacket();
+      Serial.printf("inPacketSize = %d\r\n", inPacketSize);
+      if(inPacketSize) {
+      //if(Udp.parsePacket()) {
+        Udp.read(packetBuffer, NTP_PACKET_SIZE);
+
+        unsigned long highWord = word(packetBuffer[40], packetBuffer[41]);
+        unsigned long lowWord = word(packetBuffer[42], packetBuffer[43]);
+
+        unsigned long secsSince1900 = highWord << 16 | lowWord;
+        Serial.print("Seconds since Jan 1 1900 = ");
+        Serial.println(secsSince1900);
+
+        Serial.print("Unix time = ");
+        const unsigned long seventyYears = 2208988800UL;
+        unsigned long epoch = secsSince1900 - seventyYears;
+        Serial.println(epoch);
+        
+        Serial.print("The UTC time is ");
+        Serial.print((epoch % 86400L) / 3600);
+        Serial.print(':');
+        if(((epoch % 3600) / 60) < 10) {
+          Serial.print('0');
+        }
+        Serial.print((epoch % 3600) / 60);
+        Serial.print(':');
+        if((epoch % 60) < 10) {
+          Serial.print('0');
+        }
+        Serial.println(epoch % 60);
+
+        time_t rawtime;
+        struct tm ts;
+        char buf[80];
+
+        rawtime = epoch;
+        ts = *localtime(&rawtime);
+        strftime(buf, sizeof(buf), "%a %Y-%m-%d %H:%M:%S %Z", &ts);
+        Serial.printf("NTP GMT Time is %s\r\n", buf);
+        Serial.printf("NTP Local Time is: %d-%d-%d %d-%d-%d\r\n", 
+          ts.tm_year + 1900, ts.tm_mon + 1, ts.tm_mday, ts.tm_hour + 9, ts.tm_min, ts.tm_sec);
+      }
+      delay(10000);
+      Ethernet.maintain();
+
+      if(Serial.available()) {
+        c = Serial.read();
+        if((c == 'q') || (c == '#')) {
+          Serial.println("Exit NTP Receive Loop");
+          break;
+        }
+      }
+
+    }
+    Udp.stop();
+
   } else {
     Serial.println("Invalid Test Number");
     return;
