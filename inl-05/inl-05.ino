@@ -15,7 +15,7 @@
 #include <EspUsbHost.h>
 #include <esp_log.h>
 
-#define VERSION_INL05_FW  "20240412"
+#define VERSION_INL05_FW  "20240415"
 
 #define PIN_LED_STATUS      10  // 20
 #define PIN_W5500_RST       40
@@ -46,7 +46,9 @@
 #define PIN_ADC_IN1         2
 #define PIN_ADC_IN3         4
 #define PIN_ADC_IN8         9
-#if 1
+
+#define USING_TX_INV_TR
+#ifdef USING_TX_INV_TR
 // Using TX inverting transistor
 #define MAX485_DIR_SEND     LOW
 #define MAX485_DIR_RECEIVE  HIGH
@@ -108,6 +110,13 @@ int i2c_write_sw(uint8_t addr, uint8_t reg, uint8_t* pdata, uint8_t dlen);
 int i2c_read_sw_duart(uint8_t addr, uint8_t reg, uint8_t* pdata, uint8_t dlen);
 int i2c_write_sw_duart(uint8_t addr, uint8_t reg, uint8_t* pdata, uint8_t dlen);
 #endif
+
+#define LED_TOGGLE_PERIOD   500  // msec
+int gv_led_status = HIGH;
+unsigned long gv_prev_millis;
+unsigned long gv_cur_millis;
+void led_toggle(void);
+void led_toggle_check(void);
 
 void gpio_exp8_conf(void);
 void gpio_exp8_read(uint8_t addr, uint8_t* pdata);
@@ -177,12 +186,104 @@ void sub_test_p(void);    // UART RX Function Test
 void sub_test_q(void);    // UART TX/RX Function Test
 void sub_test_r(void);    // EEPROM Test
 
+void prt_cmd_info_all(void){
+
+  Serial.println("a: LED Test");
+  Serial.println("b: Button Test");
+  Serial.println("c: USB OTG Test");
+  Serial.println("l: RTC Test");
+  Serial.println("m: IO & Expander Test");
+  Serial.println("n: Network Function Test");
+  Serial.println("o: UART TX Test");
+  Serial.println("p: UART RX Test");
+  Serial.println("q: UART TX/RX Test");
+  Serial.println("r: EEPROM Test");
+  Serial.println();
+}
+
+void prt_cmd_info_a(void){
+
+}
+
+void prt_cmd_info_b(void){
+
+}
+
+void prt_cmd_info_c(void){
+
+  Serial.println("7: DRP Mode");
+  Serial.println("Host Test: ");
+  Serial.println("  1) Plug OTG Cable");
+  Serial.println("  2) Plug Keyboard");
+  Serial.println("  3) Typing & Check");
+  Serial.println("  4) Unplug Keyboard and Cable");
+  Serial.println("  5) Press # to return to main loop");
+  Serial.println("Device Test: ");
+  Serial.println("  1) Connect to Host PC with C-type USB Cable");
+  Serial.println("  2) Typing & Check : input abc and check bcd printed");
+  Serial.println("  3) Unplug C-type USB Cable");
+  Serial.println("  4) Press # to return to main loop");
+  Serial.println();
+}
+
+void prt_cmd_info_l(void){
+
+  Serial.println("3: set (time value should be set in the source code)");
+  Serial.println("4: Read RTC time value");
+  Serial.println();
+}
+
+void prt_cmd_info_m(void){
+
+  Serial.println("1: Read NDA-08V DIP Switch (ON: Low, OFF: High)");
+  Serial.println("2: Write Output value of J6[OUTPUT] (ON: Low, OFF: High)");
+  Serial.println("3: Read Input value of J2(12V, Upper Byte), J4(5V, Lower Byte)[INPUT]");
+  Serial.println("4: Control Relay 1, 2");
+  Serial.println("8: Read Analog value of J9[ADC/GPIO]");
+  Serial.println("9: Read Digital value of J9[ADC/GPIO]");
+  Serial.println();
+}
+
+void prt_cmd_info_n(void){
+
+  Serial.println("3: Initialize network setting");
+  Serial.println("4: Check network port status");
+  Serial.println("7: Set DHCP");
+  Serial.println();
+}
+
+void prt_cmd_info_o(void){
+
+  Serial.println("RS232 TX or RS485 A/B TX of J12");
+  Serial.println("  Press # to return to main loop during transmitting data");
+  Serial.println();
+}
+
+void prt_cmd_info_p(void){
+
+  Serial.println("RS232 RX or RS485 A/B RX of J12");
+  Serial.println("  Press # to return to main loop during receiving data");
+  Serial.println();
+}
+
+void prt_cmd_info_q(void){
+
+  Serial.println("1: J12, 2: N.A., 3: J14, 4: J15");
+  Serial.println();
+}
+
+void prt_cmd_info_r(void){
+
+  Serial.println("0: Read 512 bytes, 1: Write 512 sequential data");
+  Serial.println();
+}
+
 void setup() {
 
   Serial.begin(115200);
   Serial1.begin(115200, SERIAL_8N1, PIN_RS232_RX, PIN_RS232_TX);  // RS232
-  //Serial2.begin(115200, SERIAL_8N1, PIN_RS485_RX, PIN_RS485_TX);  // RS485, RS232 TTL
-  Serial2.begin(57600, SERIAL_8N1, PIN_RS485_RX, PIN_RS485_TX);  // RS485, RS232 TTL
+  Serial2.begin(115200, SERIAL_8N1, PIN_RS485_RX, PIN_RS485_TX);  // RS485, RS232 TTL
+  //Serial2.begin(57600, SERIAL_8N1, PIN_RS485_RX, PIN_RS485_TX);  // RS485, RS232 TTL
   //Serial2.begin(19200, SERIAL_8N1, PIN_RS485_RX, PIN_RS485_TX);  // RS485, RS232 TTL
   //Serial2.begin(9600, SERIAL_8N1, PIN_RS485_RX, PIN_RS485_TX);  // RS485, RS232 TTL
 
@@ -268,11 +369,15 @@ void loop() {
 
   Serial.println();
   Serial.println("INL-05 testing.");
-  Serial.println("(C) 2023 Dignsys");
+  Serial.println("(C) 2024 Dignsys");
   Serial.printf("VERSION: %s\r\n\r\n", VERSION_INL05_FW);
+
+  prt_cmd_info_all();
+  gv_prev_millis = gv_cur_millis = millis();
 
   char c;
   while(c != 'x') {
+    Serial.println();
     Serial.printf("Input Command: ");
     while(1){
       if(Serial.available()) {
@@ -282,6 +387,7 @@ void loop() {
         }
       }
       delay(100);
+      led_toggle_check();
     }
     Serial.printf("%c", c);
     Serial.println();
@@ -476,14 +582,14 @@ void gpio_exp8_read(uint8_t addr, uint8_t* pdata){
   sw.endTransmission();
 
   rslt = sw.requestFrom(addr, (uint8_t)2);
-  Serial.printf("Request Result: Addr: 0x%02x, 0x%02x\r\n", addr, rslt);
+  //Serial.printf("Request Result: Addr: 0x%02x, 0x%02x\r\n", addr, rslt);
 
   while(1){
     if (sw.available()) {
       rdata[idx++] = sw.read();
-      Serial.printf("I2C read 0x%02x at cnt %d\r\n", rdata[cnt], cnt);
+      //Serial.printf("I2C read 0x%02x at cnt %d\r\n", rdata[cnt], cnt);
       if(idx >= 2){
-        Serial.printf("rdata: 0x%02x, 0x%02x\r\n", rdata[0], rdata[1]);
+        //Serial.printf("rdata: 0x%02x, 0x%02x\r\n", rdata[0], rdata[1]);
         break;
       }
     }
@@ -804,6 +910,25 @@ void setRS485Dir(bool dir) {
   }
 }
 
+void led_toggle(void) {
+
+  if(gv_led_status == HIGH){
+    gv_led_status = LOW;
+  } else {
+    gv_led_status = HIGH;
+  }
+  digitalWrite(PIN_LED_STATUS, gv_led_status);
+}
+
+void led_toggle_check(void) {
+
+  gv_cur_millis = millis();
+  if((gv_cur_millis - gv_prev_millis) > LED_TOGGLE_PERIOD){
+    led_toggle();
+    gv_prev_millis = gv_cur_millis;
+  }
+}
+
 void sub_test_a(void) {
 
   Serial.println("Sub-test A - LED");
@@ -818,7 +943,7 @@ void sub_test_a(void) {
       c = Serial.read();
       if(isalnum(c)) Serial.println(c);
     }
-    if(c == 'q'){
+    if((c == 'q') || (c == '#')){
       Serial.println("Quit loop");
       break;
     }
@@ -848,7 +973,7 @@ void sub_test_b(void) {
       c = Serial.read();
       if(isalnum(c)) Serial.println(c);
     }
-    if(c == 'q'){
+    if((c == 'q') || (c == '#')){
       Serial.println("Quit loop");
       break;
     }
@@ -869,6 +994,7 @@ void sub_test_c(void) {
   uint8_t usb_device_prc = 0;
 
   Serial.println("Sub-test C - USB-OTG");
+  prt_cmd_info_c();
 
   Serial.print("Input Test Number: ");
   while(1){
@@ -1138,6 +1264,7 @@ void sub_test_l(void) {
   int numBytes;
   char c;
   Serial.println("Sub-test L - RTC");
+  prt_cmd_info_l();
 
   Serial.print("Input Test Number: ");
   while(1){
@@ -1222,6 +1349,7 @@ void sub_test_m(void) {
   char c;
   uint8_t reg;
   Serial.println("Sub-test M - IO Expander");
+  prt_cmd_info_m();
 
   Serial.print("Input Test Number: ");
   while(1){
@@ -1254,7 +1382,7 @@ void sub_test_m(void) {
     Serial.printf("pcf_data: 0x%02x\r\n", rdata[0]);
 
   } else if(c == '2') {
-    Serial.print("Input PCF OUT Data: ");
+    Serial.print("Input PCF OUT Data (e.g. aa): ");
     while(1){
       if(Serial.available()) {
         c = Serial.read();
@@ -1606,6 +1734,7 @@ void sub_test_n(void) {
   int numBytes;
   char c;
   Serial.println("Sub-test N - W5500");
+  prt_cmd_info_n();
 
   Serial.print("Input Test Number: ");
   while(1){
@@ -1789,6 +1918,7 @@ void sub_test_o(void) {
   char c;
   uint8_t data = 0;
   Serial.println("Sub-test O - UART TX");
+  prt_cmd_info_o();
 
   Serial.print("Select Port (1:RS232, 2:RS485): ");
   while(1){
@@ -1845,6 +1975,7 @@ void sub_test_p(void) {
   uint8_t data[128] = {0,};
   uint16_t length, rsize;
   Serial.println("Sub-test P - UART RX");
+  prt_cmd_info_p();
 
   Serial.print("Select Port (1:RS232, 2:RS485): ");
   while(1){
@@ -1912,6 +2043,7 @@ void sub_test_q(void) {
   uint8_t wdata[128] = {0,};
   uint16_t rlen, rsize;
   Serial.println("Sub-test Q - UART TX/RX");
+  prt_cmd_info_q();
 
   Serial.print("Select Port (1:RS232, 2:RS232 TTL, 3:RS232_A, 4:RS232_B): ");
   while(1){
@@ -2025,6 +2157,7 @@ void sub_test_r(void) {
   uint8_t data;
   char c;
   Serial.println("Sub-test R - EEPROM");
+  prt_cmd_info_r();
 
   Serial.print("Input Test Number: ");
   while(1){
