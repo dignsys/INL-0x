@@ -15,7 +15,7 @@
 #include <EspUsbHost.h>
 #include <esp_log.h>
 
-#define VERSION_INL05_FW  "20240415"
+#define VERSION_INL05_FW  "20240418"
 
 #define PIN_LED_STATUS      10  // 20
 #define PIN_W5500_RST       40
@@ -274,7 +274,8 @@ void prt_cmd_info_q(void){
 
 void prt_cmd_info_r(void){
 
-  Serial.println("0: Read 512 bytes, 1: Write 512 sequential data");
+  Serial.println("0: Read 512 bytes");
+  Serial.println("1: Write 512 sequential data");
   Serial.println();
 }
 
@@ -369,7 +370,7 @@ void loop() {
 
   Serial.println();
   Serial.println("INL-05 testing.");
-  Serial.println("(C) 2024 Dignsys");
+  Serial.println("(C) 2023 Dignsys");
   Serial.printf("VERSION: %s\r\n\r\n", VERSION_INL05_FW);
 
   prt_cmd_info_all();
@@ -1332,6 +1333,8 @@ void sub_test_l(void) {
     sw.endTransmission();
   } else if (c == '4') {  // Read Time
     readTime();
+  } else if (c == '5') {
+    Serial.printf("Date: [%s], Time: [%s], Time: [%s]", __DATE__, __TIME__, __TIMESTAMP__);
   } else {
     Serial.println("Invalid Test Number");
     return;
@@ -2250,7 +2253,7 @@ void sub_test_r(void) {
   while(1){
     if(Serial.available()) {
       c = Serial.read();
-      break;
+      if(isalnum(c)) break;
     }
     delay(100);
   }

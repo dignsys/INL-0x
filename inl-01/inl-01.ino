@@ -13,7 +13,7 @@
 #include <WebServer.h>
 #include <ESPmDNS.h>
 
-#define VERSION_INL01_FW  "20240412"
+#define VERSION_INL01_FW  "20240418"
 
 #define PIN_LED             20
 #define PIN_W5500_RST       40
@@ -53,6 +53,13 @@ DhcpClass* dhcp = new DhcpClass();
 
 #define EEPROM_SIZE 512
 
+#define LED_TOGGLE_PERIOD   500  // msec
+int gv_led_status = HIGH;
+unsigned long gv_prev_millis;
+unsigned long gv_cur_millis;
+void led_toggle(void);
+void led_toggle_check(void);
+
 //#define WIFI_FS_TEST
 
 const char* ssid = "********";
@@ -74,6 +81,59 @@ void sub_test_n(void);    // W5500 Network Function Test
 void sub_test_o(void);    // UART Function Test
 void sub_test_r(void);    // EEPROM Test
 void sub_test_s(void);    // LittleFS & Web
+
+void prt_cmd_info_all(void){
+
+  Serial.println("a: LED Test");
+  Serial.println("b: Button Test");
+  Serial.println("m: IO & ADC Test");
+  Serial.println("n: Network Function Test");
+  Serial.println("o: UART TX/RX Test");
+  Serial.println("r: EEPROM Test");
+  Serial.println();
+}
+
+void prt_cmd_info_a(void){
+
+}
+
+void prt_cmd_info_b(void){
+
+}
+
+void prt_cmd_info_m(void){
+
+  Serial.println("0: Read Analog value of J10[ADC/GPIO]");
+  Serial.println("1: Read Digital value of J10[ADC/GPIO]");
+  Serial.println("2: Read Analog value of J8[ADC/GPIO]");
+  Serial.println("3: Read Digital value of J8[ADC/GPIO]");
+  Serial.println();
+}
+
+void prt_cmd_info_n(void){
+
+  Serial.println("3: Initialize network setting");
+  Serial.println("4: Check network port status");
+  Serial.println("7: Set DHCP");
+  Serial.println();
+}
+
+void prt_cmd_info_o(void){
+
+  Serial.println("1: J9, 2: J8");
+  Serial.println();
+}
+
+void prt_cmd_info_r(void){
+
+  Serial.println("0: Read 512 bytes");
+  Serial.println("1: Write 512 sequential data");
+  Serial.println();
+}
+
+void prt_cmd_info_s(void){
+
+}
 
 void listDir(fs::FS &fs, const char * dirname, uint8_t levels){
     Serial.printf("Listing directory: %s\r\n", dirname);
@@ -634,8 +694,9 @@ void loop() {
 
   Serial.println();
   Serial.println("INL-01 testing.");
-  Serial.println("(C) 2024 Dignsys");
+  Serial.println("(C) 2023 Dignsys");
   Serial.printf("VERSION: %s\r\n\r\n", VERSION_INL01_FW);
+  prt_cmd_info_all();
 
   char c;
   while(c != 'x') {
@@ -648,6 +709,7 @@ void loop() {
         }
       }
       delay(100);
+      led_toggle_check();
     }
     Serial.printf("%c", c);
     Serial.println();
@@ -682,9 +744,29 @@ void loop() {
 
 }
 
+void led_toggle(void) {
+
+  if(gv_led_status == HIGH){
+    gv_led_status = LOW;
+  } else {
+    gv_led_status = HIGH;
+  }
+  digitalWrite(PIN_LED, gv_led_status);
+}
+
+void led_toggle_check(void) {
+
+  gv_cur_millis = millis();
+  if((gv_cur_millis - gv_prev_millis) > LED_TOGGLE_PERIOD){
+    led_toggle();
+    gv_prev_millis = gv_cur_millis;
+  }
+}
+
 void sub_test_a(void) {
 
   Serial.println("Sub-test A - LED");
+  prt_cmd_info_a();
 
   char c = 0;
   uint8_t led_status = 0;
@@ -696,7 +778,7 @@ void sub_test_a(void) {
       c = Serial.read();
       if(isalnum(c)) Serial.println(c);
     }
-    if(c == 'q'){
+    if((c == 'q') || (c == '#')){
       Serial.println("Quit loop");
       break;
     }
@@ -715,6 +797,7 @@ void sub_test_a(void) {
 void sub_test_b(void) {
 
   Serial.println("Sub-test B - Button");
+  prt_cmd_info_b();
 
   char c = 0;
   uint8_t button_status = 0;
@@ -724,9 +807,9 @@ void sub_test_b(void) {
   while(1) {
     if(Serial.available()) {
       c = Serial.read();
-      Serial.println(c);
+      if(isalnum(c)) Serial.println(c);
     }
-    if(c == 'q'){
+    if((c == 'q') || (c == '#')){
       Serial.println("Quit loop");
       break;
     }
@@ -746,6 +829,7 @@ void sub_test_m(void) {
   char c;
   uint8_t reg;
   Serial.println("Sub-test M - IO & ADC");
+  prt_cmd_info_m();
 
   Serial.print("Input Test Number: ");
   while(1){
@@ -847,6 +931,7 @@ void sub_test_n(void) {
   int numBytes;
   char c;
   Serial.println("Sub-test N - W5500");
+  prt_cmd_info_n();
 
   Serial.print("Input Test Number: ");
   while(1){
@@ -1059,6 +1144,7 @@ void sub_test_o(void) {
   uint8_t rdata[128] = {0,};
   uint16_t rlen, rsize;
   Serial.println("Sub-test O - UART TX/RX");
+  prt_cmd_info_o();
 
   Serial.print("Select Port (1:RS232, 2:RS232 TTL): ");
   while(1){
@@ -1130,12 +1216,13 @@ void sub_test_r(void) {
   uint8_t data;
   char c;
   Serial.println("Sub-test R - EEPROM");
+  prt_cmd_info_r();
 
   Serial.print("Input Test Number: ");
   while(1){
     if(Serial.available()) {
       c = Serial.read();
-      break;
+      if(isalnum(c)) break;
     }
     delay(100);
   }
@@ -1164,6 +1251,7 @@ void sub_test_s(void) {
   char c;
   int r_data = 0;
   Serial.println("Sub-test S - LiitleFS & Web");
+  prt_cmd_info_s();
 
   Serial.print("Input Test Number: ");
   while(1){
@@ -1239,9 +1327,9 @@ void sub_test_s(void) {
     while(1){
       if(Serial.available()) {
         c = Serial.read();
-        Serial.println(c);
+        if(isalnum(c)) Serial.println(c);
       }
-      if(c == 'q') {
+      if((c == 'q') || (c == '#')) {
         Serial.println("Quit loop");
         break;
       }
