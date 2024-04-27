@@ -1,9 +1,9 @@
 # INL-0x Series Training Document & sample sources
 
 ## 01_INL보드 개발환경 교육자료
-### Download Arduino IDE
-### INL : IoT Node Link
-### INL-01 이해
+--- Download Arduino IDE
+-- INL : IoT Node Link
+- INL-01 이해
 ### INL-01 개발 환경
 ### INL-01 동작 시험 : LED 제어
 - INL-01 동작 시험 : BUTTON 입력
