@@ -1,4 +1,4 @@
-#define LED LED_BUILTIN
+#define LED 20
 
 // the setup function runs once when you press reset or power the board
 void setup() {
