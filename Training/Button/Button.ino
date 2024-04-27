@@ -1,4 +1,4 @@
-#define buttonPin 5
+#define buttonPin 0
 int buttonState = 0;
 
 void setup() {
