@@ -5,13 +5,12 @@
 - INL : IoT Node Link
 - INL-01 이해
 - INL-01 개발 환경
-- INL-01 동작 시험
-  ㅇ LED 제어
-  ㅇ BUTTON 입력
-  ㅇ Analog 입력
-  ㅇ UART 통신
-  ㅇ WLAN 통신
-  ㅇ 유선 LAN 통신
-  ㅇ EEPROM Read/Write
+- INL-01 동작 시험 : LED 제어
+- INL-01 동작 시험 : BUTTON 입력
+- INL-01 동작 시험 : Analog 입력
+- INL-01 동작 시험 : UART 통신
+- INL-01 동작 시험 : WLAN 통신
+- INL-01 동작 시험 : 유선 LAN 통신
+- INL-01 동작 시험 : EEPROM Read/Write
 - 참고 : ESP32-S3 이해
 
