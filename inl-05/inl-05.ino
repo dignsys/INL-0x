@@ -1,11 +1,16 @@
 /* 
- * INL-05 Main 
+ * INL-03/05 Main 
  * Author : DIGNSYS Inc.
  */
 
+#define SYS_INL03     3
+#define SYS_INL05     5
+//#define SYS_INL_HW    SYS_INL03
+#define SYS_INL_HW    SYS_INL05
+
 #include <Arduino.h>
-#include <SC16IS752Serial.h>
 #include <SoftWire.h>
+#include <SC16IS752Serial.h>
 #include <Wire.h>
 #include <SPI.h>
 #include <Ethernet_Generic.h>
@@ -15,7 +20,13 @@
 #include <EspUsbHost.h>
 #include <esp_log.h>
 
-#define VERSION_INL05_FW  "20240418"
+#if (SYS_INL_HW == SYS_INL03)
+const char* product_name = "INL-03";
+#elif (SYS_INL_HW == SYS_INL05)
+const char* product_name = "INL-05";
+#endif
+
+#define VERSION_INL0x_FW  "20240517"
 
 #define PIN_LED_STATUS      10  // 20
 #define PIN_W5500_RST       40
@@ -79,13 +90,7 @@ uint8_t sw_rx_buf[16];
 uint8_t str_cur_date[9] = {0,};
 uint8_t str_cur_time[9] = {0,};
 
-//#define PCF_HW_I2C_TEST
-
-#ifdef PCF_HW_I2C_TEST
-SoftWire sw(9, 10);
-#else
 SoftWire sw(PIN_SW_I2C_SDA, PIN_SW_I2C_SCL);
-#endif
 
 //#define USING_SW_I2C_TO_DUART
 
@@ -122,6 +127,9 @@ void gpio_exp8_conf(void);
 void gpio_exp8_read(uint8_t addr, uint8_t* pdata);
 void gpio_exp8_read_m(uint8_t addr, uint8_t* pdata);
 void gpio_exp8_write(uint8_t addr, uint8_t data);
+void gpio_exp8_conf2(void);
+void gpio_exp8_read2(uint8_t addr, uint8_t* pdata);
+void gpio_exp8_write2(uint8_t addr, uint8_t data);
 void gpio_exp_conf(void);
 void gpio_exp_read(uint16_t* pdata);
 void gpio_exp_write(uint16_t data);
@@ -321,6 +329,8 @@ void setup() {
   sw.setDelay_us(5);
   sw.setTimeout(1000);
   sw.begin();
+  sw.setClock(100000);
+  Serial.printf("SW I2C SDA: %0d, SCL: %0d\r\n", sw.getSda(), sw.getScl());
 
   // GPIO Expander
   gpio_exp8_conf();
@@ -328,17 +338,17 @@ void setup() {
   hspi = new SPIClass(HSPI);
   hspi->begin(PIN_ETH_SCLK, PIN_ETH_MISO, PIN_ETH_MOSI, PIN_ETH_CS);
 
-#ifdef PCF_HW_I2C_TEST
-  Wire.begin(PIN_SW_I2C_SDA, PIN_SW_I2C_SCL, 400000);
-#else
-  //Wire.begin(PIN_I2C1_SDA, PIN_I2C1_SCL, 400000);
   Wire.begin(PIN_I2C1_SDA, PIN_I2C1_SCL);
-  //Wire.setClock(50000);
   Wire.setClock(400000);
-  //Wire.begin(PIN_I2C2_SDA, PIN_I2C2_SCL);
   Serial.printf("I2C Clock: %0d\r\n", Wire.getClock());  // Default 100k
+
+#if (SYS_INL_HW == SYS_INL03)
+  Wire1.begin(PIN_I2C2_SDA, PIN_I2C2_SCL);
+  Wire1.setClock(400000);
+  Serial.printf("I2C2 Clock: %0d\r\n", Wire1.getClock());  // Default 100k
+
+  gpio_exp8_conf2();
 #endif
-  //Wire1.begin(PIN_I2C2_SDA, PIN_I2C2_SCL, 400000);
 
 #ifdef USING_SW_I2C_TO_DUART
   sw_duart.setTxBuffer(sw_duart_tx_buf, sizeof(sw_duart_tx_buf));
@@ -348,9 +358,11 @@ void setup() {
   sw_duart.begin();
 #endif
 
+#if (SYS_INL_HW == SYS_INL05)
   // SC16IS752 UART setup. (begin is excuted here instead of pzem creation)
   serial0.begin(SC_REF_BAUDRATE);
   serial1.begin(SC_REF_BAUDRATE);
+#endif
 
   // initialize EEPROM with predefined size
   EEPROM.begin(EEPROM_SIZE);
@@ -369,9 +381,9 @@ void setup() {
 void loop() {
 
   Serial.println();
-  Serial.println("INL-05 testing.");
+  Serial.printf("%s testing.\r\n", product_name);
   Serial.println("(C) 2023 Dignsys");
-  Serial.printf("VERSION: %s\r\n\r\n", VERSION_INL05_FW);
+  Serial.printf("VERSION: %s\r\n\r\n", VERSION_INL0x_FW);
 
   prt_cmd_info_all();
   gv_prev_millis = gv_cur_millis = millis();
@@ -552,7 +564,6 @@ int i2c_write_sw_duart(uint8_t addr, uint8_t reg, uint8_t* pdata, uint8_t dlen){
 #endif
 
 void gpio_exp8_conf(void){
-#ifndef PCF_HW_I2C_TEST
   sw.beginTransmission(I2C_ADDR_PCF_SW);
   sw.write(0x00);
   sw.endTransmission();
@@ -560,15 +571,12 @@ void gpio_exp8_conf(void){
   sw.beginTransmission(I2C_ADDR_PCF_OUT);
   sw.write(0x00);
   sw.endTransmission();
-#else
-  Wire.beginTransmission(I2C_ADDR_PCF_SW);
-  Wire.write(0xff);
-  Wire.endTransmission();
+}
 
-  Wire.beginTransmission(I2C_ADDR_PCF_OUT);
-  Wire.write(0x00);
-  Wire.endTransmission();
-#endif
+void gpio_exp8_conf2(void){
+  Wire1.beginTransmission(I2C_ADDR_PCF_OUT);
+  Wire1.write(0xff);
+  Wire1.endTransmission();
 }
 
 void gpio_exp8_read(uint8_t addr, uint8_t* pdata){
@@ -577,7 +585,7 @@ void gpio_exp8_read(uint8_t addr, uint8_t* pdata){
   uint8_t cnt = 0;
   uint8_t idx = 0;
   uint8_t rslt = 0;
-#ifndef PCF_HW_I2C_TEST
+
   sw.beginTransmission(addr);
   sw.write(0xff);
   sw.endTransmission();
@@ -601,14 +609,28 @@ void gpio_exp8_read(uint8_t addr, uint8_t* pdata){
       break;
     }
   }
-#else
-  Wire.begin();
-  rslt = Wire.requestFrom(addr, (uint8_t)1);
-  Serial.printf("Request Result: Addr: 0x%02x, 0x%02x\r\n", addr, rslt);
+
+  *pdata = rdata[0];
+}
+
+void gpio_exp8_read2(uint8_t addr, uint8_t* pdata){
+
+  uint8_t rdata[3] = {0,};
+  uint8_t cnt = 0;
+  uint8_t idx = 0;
+  uint8_t rslt = 0;
+
+  Wire1.beginTransmission(addr);
+  Wire1.write(0xff);
+  Wire1.endTransmission();
+
+  rslt = Wire1.requestFrom(addr, (uint8_t)2);
+  //Serial.printf("Request Result: Addr: 0x%02x, 0x%02x\r\n", addr, rslt);
 
   while(1){
-    if (Wire.available()) {
-      rdata[0] = Wire.read();
+#if 0
+    if (Wire1.available()) {
+      rdata[0] = Wire1.read();
       Serial.printf("I2C read at cnt %d\r\n", cnt);
       break;
     }
@@ -618,10 +640,25 @@ void gpio_exp8_read(uint8_t addr, uint8_t* pdata){
       rdata[0] = Wire.read();
       break;
     }
-  }
+#else
+    if (Wire1.available()) {
+      rdata[idx++] = Wire1.read();
+      //Serial.printf("I2C read 0x%02x at cnt %d\r\n", rdata[cnt], cnt);
+      if(idx >= 2){
+        //Serial.printf("rdata: 0x%02x, 0x%02x\r\n", rdata[0], rdata[1]);
+        break;
+      }
+    }
+    delay(1);
+    if(++cnt > 100){
+      Serial.println("HW I2C read time-out!");
+      Serial.printf("rdata: 0x%02x, 0x%02x\r\n", rdata[0], rdata[1]);
+      break;
+    }
 #endif
-  *pdata = rdata[0];
+  }
 
+  *pdata = rdata[0];
 }
 
 void gpio_exp8_read_m(uint8_t addr, uint8_t* pdata){
@@ -724,15 +761,17 @@ void gpio_exp8_read_m(uint8_t addr, uint8_t* pdata){
 }
 
 void gpio_exp8_write(uint8_t addr, uint8_t data){
-#ifndef PCF_HW_I2C_TEST
   sw.beginTransmission(addr);
   sw.write(data);
   sw.endTransmission();
-#else  
-  Wire.beginTransmission(addr);
-  Wire.write(data);
-  Wire.endTransmission();
-#endif
+}
+
+void gpio_exp8_write2(uint8_t addr, uint8_t data){
+  Wire1.beginTransmission(addr);
+  Wire1.write(0x00);
+  Wire1.write(data);
+  Wire1.write(data);
+  Wire1.endTransmission();
 }
 
 void gpio_exp_conf(void){
@@ -1422,16 +1461,31 @@ void sub_test_m(void) {
     }
     Serial.println(c);
 
+#if (SYS_INL_HW == SYS_INL05)
     gpio_exp8_write(I2C_ADDR_PCF_OUT, tdata);
     Serial.printf("pcf_data_write: 0x%02x\r\n", tdata);
+#elif (SYS_INL_HW == SYS_INL03)
+    gpio_exp8_write2(I2C_ADDR_PCF_OUT, tdata);
+    Serial.printf("pcf_data_write: 0x%02x\r\n", tdata);
+#endif
 
     //gpio_exp8_read(I2C_ADDR_PCF_OUT, rdata);
     //Serial.printf("pcf_data_read: 0x%02x\r\n", rdata[0]);
 
   } else if(c == '3') {
+#if (SYS_INL_HW == SYS_INL05)
     gpio_exp_read(&data);
     Serial.printf("mcp_data: 0x%04x\r\n", data);
-
+#elif (SYS_INL_HW == SYS_INL03)
+    gpio_exp8_read2(I2C_ADDR_PCF_OUT, rdata);
+    Serial.printf("pcf_data: 0x%02x\r\n", rdata[0]);
+    if(!(rdata[0] & 0x02)) {
+      Serial.printf("12V GPIO Input is LOW!\r\n");
+    }
+    if(!(rdata[0] & 0x04)) {
+      Serial.printf("5V GPIO Input is LOW!\r\n");
+    }
+#endif
   } else if(c == '4') {  // Relay On/Off
     Serial.print("Relay Number[1,2]: ");
     while(1){
@@ -1672,6 +1726,51 @@ void sub_test_m(void) {
       delay(500);
     }
 #endif
+    uint8_t ret, ndev;
+    ndev = 0;
+    for(int i = 0x01; i < 0x7f; i++){
+      Wire.beginTransmission(i);
+      ret = Wire.endTransmission();
+      if (ret == 0){
+        Serial.printf("I2C (Wire) device found at address 0x%02X\n", i);
+        ndev++;
+      } else if(ret != 2){
+        Serial.printf("Error (Wire) %d at address 0x%02X\n", ret, i);
+      }
+    }
+    if (ndev == 0){
+      Serial.println("No I2C devices found in Wire");
+    }
+#if (SYS_INL_HW == SYS_INL03)
+    ndev = 0;
+    for(int i = 0x01; i < 0x7f; i++){
+      Wire1.beginTransmission(i);
+      ret = Wire1.endTransmission();
+      if (ret == 0){
+        Serial.printf("I2C (Wire1) device found at address 0x%02X\n", i);
+        ndev++;
+      } else if(ret != 2){
+        Serial.printf("Error (Wire1) %d at address 0x%02X\n", ret, i);
+      }
+    }
+    if (ndev == 0){
+      Serial.println("No I2C devices found in Wire1");
+    }
+#endif
+    ndev = 0;
+    for(int i = 0x01; i < 0x7f; i++){
+      sw.beginTransmission(i);
+      ret = sw.endTransmission();
+      if (ret == 0){
+        Serial.printf("I2C (sw) device found at address 0x%02X\n", i);
+        ndev++;
+      } else if(ret != 2){
+        Serial.printf("Error (sw) %d at address 0x%02X\n", ret, i);
+      }
+    }
+    if (ndev == 0){
+      Serial.println("No I2C devices found in sw");
+    }
   } else if(c == '8') {  // ADC Input
     uint16_t adc_in0, adc_in1, adc_in3, adc_in8;
     int adc_mvolt0, adc_mvolt1, adc_mvolt3, adc_mvolt8;
@@ -1817,7 +1916,7 @@ void sub_test_n(void) {
     hspi->setFrequency(40000000);
     Ethernet._pinRST = PIN_W5500_RST;
     Ethernet._pinCS = PIN_ETH_CS;
-    Ethernet.setHostname("INL05_001");
+    Ethernet.setHostname("INL0x_001");
     Ethernet.setRetransmissionCount(3);
     Ethernet.setRetransmissionTimeout(4000);
 
