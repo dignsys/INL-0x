@@ -13,7 +13,7 @@
 #include <WebServer.h>
 #include <ESPmDNS.h>
 
-#define VERSION_INL01_FW  "20240418"
+#define VERSION_INL01_FW  "20240522"
 
 #define PIN_LED             20
 #define PIN_W5500_RST       40
@@ -1150,7 +1150,7 @@ void sub_test_o(void) {
   while(1){
     if(Serial.available()) {
       c = Serial.read();
-      break;
+      if(isalnum(c)) break;
     }
     delay(100);
   }
@@ -1172,13 +1172,15 @@ void sub_test_o(void) {
   while(1) {
     if(Serial.available()) {
       c = Serial.read();
-      d_in = 1;
 
-      if(!isalnum(c)){
+      if(c == '#'){
         Serial.println("Quit data input");
         break;
       }
-      Serial.print("d_in: "); Serial.println(c);
+      if(isalnum(c)) {
+        d_in = 1;
+        Serial.print("d_in: "); Serial.println(c);
+      }
     }
 
     if(uport == 1) {
