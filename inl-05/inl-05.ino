@@ -26,7 +26,7 @@ const char* product_name = "INL-03";
 const char* product_name = "INL-05";
 #endif
 
-#define VERSION_INL0x_FW  "20240517"
+#define VERSION_INL0x_FW  "20240613"
 
 #define PIN_LED_STATUS      10  // 20
 #define PIN_W5500_RST       40
@@ -262,21 +262,33 @@ void prt_cmd_info_n(void){
 
 void prt_cmd_info_o(void){
 
+#if (SYS_INL_HW == SYS_INL03)
+  Serial.println("RS232 TX of J12 or RS485 A/B TX of J18");
+#else
   Serial.println("RS232 TX or RS485 A/B TX of J12");
+#endif
   Serial.println("  Press # to return to main loop during transmitting data");
   Serial.println();
 }
 
 void prt_cmd_info_p(void){
 
+#if (SYS_INL_HW == SYS_INL03)
+  Serial.println("RS232 RX of J12 or RS485 A/B RX of J18");
+#else
   Serial.println("RS232 RX or RS485 A/B RX of J12");
+#endif
   Serial.println("  Press # to return to main loop during receiving data");
   Serial.println();
 }
 
 void prt_cmd_info_q(void){
 
+#if (SYS_INL_HW == SYS_INL03)
+  Serial.println("1: J12, 2: N.A., 3: N.A., 4: N.A.");
+#else
   Serial.println("1: J12, 2: N.A., 3: J14, 4: J15");
+#endif
   Serial.println();
 }
 
